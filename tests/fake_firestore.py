@@ -34,8 +34,11 @@ class FakeDocumentRef:
     def get(self) -> FakeSnapshot:
         return FakeSnapshot(self._store.get(self.path))
 
-    def set(self, data: dict[str, Any]) -> None:
-        self._store[self.path] = copy.deepcopy(data)
+    def set(self, data: dict[str, Any], merge: bool = False) -> None:
+        if merge and self.path in self._store:
+            self._store[self.path] = {**self._store[self.path], **copy.deepcopy(data)}
+        else:
+            self._store[self.path] = copy.deepcopy(data)
 
     def create(self, data: dict[str, Any]) -> None:
         if self.path in self._store:
@@ -82,7 +85,11 @@ class FakeTransaction:
 
         return _one()
 
-    def set(self, ref: FakeDocumentRef, data: dict[str, Any]) -> None:
+    def set(self, ref: FakeDocumentRef, data: dict[str, Any], merge: bool = False) -> None:
+        if merge:
+            snapshot = next(iter(self.get(ref)), None)
+            current = snapshot.to_dict() if snapshot is not None else None
+            data = {**(current or {}), **data}
         self._writes.append(("set", ref.path, copy.deepcopy(data)))
 
     def create(self, ref: FakeDocumentRef, data: dict[str, Any]) -> None:

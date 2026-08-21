@@ -1,15 +1,18 @@
-# CI-7 secrets-scan config. Fail-closed with one reviewed exception:
-# `idempotency_key` is an ICD-4 envelope field in synthetic contract fixtures
-# (SUB-5 — all data synthetic), not a credential. The allowlist matches ONLY
-# the fixture value shape `idem-<type>-<nnnn>`; any other string that trips a
-# rule still fails the gate.
+# CI-7 secrets-scan config. Fail-closed with one reviewed exception, scoped
+# to fixture paths only: `idempotency_key` is an ICD-4 envelope field in
+# synthetic fixtures (SUB-5), not a credential. A production line containing
+# the same shape is still scanned (condition = AND: path AND pattern must
+# both match).
 [extend]
 useDefault = true
 
-[allowlist]
-description = "ICD-4 idempotency_key in synthetic contract example fixtures"
+[[allowlists]]
+description = "ICD-4 idempotency_key fixture values in tests and contract examples"
+condition = "AND"
 regexTarget = "line"
+paths = ['''^tests/''', '''^contracts/examples/''']
 regexes = [
   '''"idempotency_key": "idem-[a-z0-9_-]+"''',
   '''idempotency_key="idem-[a-z0-9_-]+"''',
+  '''idempotency_key=f"idem-''',
 ]

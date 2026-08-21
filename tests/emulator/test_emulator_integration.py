@@ -352,3 +352,83 @@ def test_expired_lease_takeover_discards_stale_plan_real_client(db):
     assert results["a"] is False  # stale plan discarded at commit
     reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, wf)]
     assert "FRESH_PLAN" in reasons and "STALE_PLAN" not in reasons
+
+
+def test_day3_exit_assign_and_produce_real_client(db):
+    """Day 3 exit criterion: Orchestrator assigns via registry discovery and
+    both specialists return contract-valid outputs — on real Firestore."""
+    import json as _json
+
+    from services.maintenance.handlers import make_handler as make_maintenance
+    from services.orchestrator.handlers import make_nmc_handler
+    from services.supply.handlers import make_handler as make_supply
+
+    from forge_common import registry
+    from forge_common.contracts import validate_message
+    from forge_common.messages import build_envelope, deterministic_event_id
+
+    registry.load_registry(db)
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    nmc = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            schema_version="nmc_event.v2",
+            event_id=deterministic_event_id("nmc", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-nmc-{wf}",
+        ),
+        "payload": {
+            "equipment_id": "GX12-07",
+            "discrepancy_code": "DSC-0042",
+            "description": "Failed hydraulic actuator on lift assembly",
+            "reported_at": "2026-08-21T09:00:00Z",
+        },
+    }
+    orchestrator = make_nmc_handler(
+        db,
+        model=lambda p: _json.dumps(
+            {
+                "objectives": {
+                    "maintenance": "Plan replacement of the failed actuator.",
+                    "supply": "Source the approved actuator and report status.",
+                }
+            }
+        ),
+    )
+    assert process_message(db, nmc, orchestrator, consumer_identity="forge-orchestrator")
+    outbox_ref = db.collection("workflows").document(wf).collection("outbox")
+    assignments = [
+        d.to_dict()["message"]
+        for d in outbox_ref.stream()
+        if d.to_dict()["message"]["envelope"]["schema_version"] == "work_package_assignment.v2"
+    ]
+    assert len(assignments) == 2
+    plan_payload = {
+        "plan_id": "plan-emu-01",
+        "equipment_id": "GX12-07",
+        "tasks": [{"task_code": "TC-101", "title": "Replace actuator", "est_hours": 6.5}],
+    }
+    report_payload = {
+        "part_number": "HYD-ACT-4402",
+        "part_approved": True,
+        "shipment_status": "delayed",
+        "eta_days": 21,
+    }
+    for assignment in assignments:
+        role = assignment["payload"]["role"]
+        handler = (
+            make_maintenance(lambda p: _json.dumps(plan_payload))
+            if role == "maintenance"
+            else make_supply(lambda p: _json.dumps(report_payload))
+        )
+        assert process_message(db, assignment, handler, consumer_identity=f"forge-{role}")
+    produced = [d.to_dict()["message"] for d in outbox_ref.stream()]
+    schemas = sorted(m["envelope"]["schema_version"] for m in produced)
+    assert schemas.count("maintenance_action_plan.v2") == 1
+    assert schemas.count("sourcing_report.v2") == 1
+    for message in produced:
+        validate_message(message)

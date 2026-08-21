@@ -132,3 +132,27 @@ Two statements in the Day-1 entry are superseded and should not be relied on:
   the 32-hex OTel mirror).
 Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
 — live GCP verification is scheduled Day 6–7 (Lane 2, CI-6).
+
+## 2026-08-23 — Day 3: Orchestrator, first specialists, registry discovery
+
+- **Orchestrator (ORC-1/2).** `services/orchestrator/handlers.py` binds no
+  domain tools; its model call yields role OBJECTIVES only, validated
+  against an internal schema via `constrained_json` (AGT-7 discipline for
+  non-bus output). Bus outputs are work_package_assignment.v2 messages +
+  exclusive ownership docs (`workflows/{id}/work_packages/{wp}`, created —
+  collision = second assignment refused by the datastore) + the PLANNING
+  transition, all in the consumer's committing transaction.
+- **Registry discovery (REG-1..3).** `registry.load_registry` (deploy step)
+  writes definitions and seeds instances (`agent-<role>-NN` — the contract's
+  assigned_agent_id pattern); workforce gets a RESERVE instance for Day 4.
+  `discover(capability)` returns only APPROVED definitions and never hands
+  out reserves; NoCapableAgent → audited escalation + BLOCKED_AGENT_FAILURE.
+- **Specialists (AGT-1/2/7).** `StructuredAgent` wraps the injected model
+  callable: parse → envelope → full contract validation; ≤2 retries then a
+  contract-valid agent_failure_event.v2. Boundary enforcement is the
+  contract itself (additionalProperties: false — a release or substitution
+  field fails validation). Specialists never request transitions.
+- Orchestrator reasoning failure raises (NACK/redeliver) instead of emitting
+  agent_failure_event — that schema's role enum is specialists-only, by
+  design (ORC-4 governs specialist failures; the orchestrator's own retry
+  path is the transport lease).
