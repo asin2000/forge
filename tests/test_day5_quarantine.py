@@ -645,10 +645,9 @@ def test_legacy_metadata_missing_audit_is_repaired():
 
 
 def test_gcs_precondition_loser_gets_conflict():
-    """Rider rename: the generation-zero precondition yields one winner; a
-    SEQUENTIAL loser with different bytes gets QuarantineConflict and the
-    winner's object survives. (True concurrency is exercised on the real
-    emulator by the barrier tests.)"""
+    """The generation-zero precondition yields one winner; a SEQUENTIAL
+    loser with different bytes gets QuarantineConflict, the winner's object
+    survives, and the rejection is AUDITED (exactly one REINGEST_CONFLICT)."""
     from forge_common.quarantine import QuarantineConflict
 
     db, client, store = gcs_workflow_ready()
@@ -656,6 +655,13 @@ def test_gcs_precondition_loser_gets_conflict():
     with pytest.raises(QuarantineConflict):
         ingest(db, store, raw_text=BULLETIN + "attacker-variant")
     assert store.read_raw(DOC) == BULLETIN
+    conflicts = [
+        e
+        for e in state.reconstruct_audit_trail(db, WF)
+        if e["payload"]["reason_code"] == "REINGEST_CONFLICT"
+    ]
+    assert len(conflicts) == 1
+    assert conflicts[0]["payload"]["event_kind"] == "blocked_action"
 
 
 def test_gcs_tampered_bytes_fail_screening_closed():

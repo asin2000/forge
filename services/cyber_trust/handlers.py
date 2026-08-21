@@ -278,9 +278,23 @@ def ingest_document(
     A doc_id reused with different bytes/workflow/source raises
     QuarantineConflict with an audited REINGEST_CONFLICT.
     """
-    record = store.establish_object(
-        doc_id=doc_id, workflow_id=workflow_id, raw_text=raw_text, source=source
-    )
+    try:
+        # Inside the conflict-audit boundary: a GCS object-byte mismatch in
+        # establish_object raises QuarantineConflict just like a
+        # workflow/source mismatch in the transaction — BOTH are audited.
+        record = store.establish_object(
+            doc_id=doc_id, workflow_id=workflow_id, raw_text=raw_text, source=source
+        )
+    except QuarantineConflict as exc:
+        _audit_reingest_conflict(
+            db,
+            workflow_id=workflow_id,
+            trace_id=trace_id,
+            doc_id=doc_id,
+            source=source,
+            error=str(exc),
+        )
+        raise
     audit = build_audit_event(
         workflow_id=workflow_id,
         trace_id=trace_id,
@@ -311,21 +325,37 @@ def ingest_document(
     try:
         return layout.run_in_transaction(db, _ingest)
     except QuarantineConflict as exc:
-        conflict_audit = build_audit_event(
+        _audit_reingest_conflict(
+            db,
             workflow_id=workflow_id,
             trace_id=trace_id,
-            agent_identity=CYBER_TRUST_AGENT,
-            event_kind="blocked_action",
-            reason_code="REINGEST_CONFLICT",
-            input_obj={"doc_id": doc_id, "source": source},
-            output_obj={"error": str(exc)[:500]},
-            effective_at=read_clock(db),
+            doc_id=doc_id,
+            source=source,
+            error=str(exc),
         )
-
-        def _conflict(txn: Any) -> None:
-            ref = layout.audit_ref(db, workflow_id, conflict_audit["envelope"]["event_id"])
-            if not layout.txn_get_dict(txn, ref):
-                txn.create(ref, conflict_audit)
-
-        layout.run_in_transaction(db, _conflict)
         raise
+
+
+def _audit_reingest_conflict(
+    db: Any, *, workflow_id: str, trace_id: str, doc_id: str, source: str, error: str
+) -> None:
+    """Audited rejection for BOTH conflict locations: GCS object-byte
+    mismatch during establish_object, and workflow/source mismatch during
+    the ingestion transaction."""
+    conflict_audit = build_audit_event(
+        workflow_id=workflow_id,
+        trace_id=trace_id,
+        agent_identity=CYBER_TRUST_AGENT,
+        event_kind="blocked_action",
+        reason_code="REINGEST_CONFLICT",
+        input_obj={"doc_id": doc_id, "source": source},
+        output_obj={"error": error[:500]},
+        effective_at=read_clock(db),
+    )
+
+    def _conflict(txn: Any) -> None:
+        ref = layout.audit_ref(db, workflow_id, conflict_audit["envelope"]["event_id"])
+        if not layout.txn_get_dict(txn, ref):
+            txn.create(ref, conflict_audit)
+
+    layout.run_in_transaction(db, _conflict)
