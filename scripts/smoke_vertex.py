@@ -11,7 +11,7 @@ import sys
 from google import genai
 
 PROJECT_ID = os.environ.get("PROJECT_ID")
-REGION = os.environ.get("REGION", "us-central1")
+REGION = os.environ.get("REGION", "us")  # gemini lives at the us multi-region (DAT-1 map)
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 
 
