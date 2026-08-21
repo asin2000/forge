@@ -27,7 +27,7 @@ MESSAGE_TYPES = (
     "sourcing_report.v3",
     "roster_assignment.v2",
     "validation_verdict.v2",
-    "quarantine_verdict.v2",
+    "quarantine_verdict.v3",
     "approval_request.v2",
     "approval_decision.v2",
     "agent_failure_event.v2",
