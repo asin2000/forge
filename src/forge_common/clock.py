@@ -14,9 +14,13 @@ from __future__ import annotations
 from typing import Any
 
 from forge_common import layout
-from forge_common.audit import now_iso
+from forge_common.audit import build_audit_event, now_iso
 from forge_common.contracts import validate_message
-from forge_common.messages import build_envelope, deterministic_event_id
+from forge_common.messages import (
+    build_envelope,
+    deterministic_event_id,
+    deterministic_trace_id,
+)
 
 
 class AlreadyEmitted(Exception):
@@ -29,15 +33,40 @@ def read_clock(db: Any) -> int:
     return int(doc["logical_time"]) if doc else 0
 
 
-def advance_clock(db: Any, days: int) -> int:
-    """Advance simulated time by ``days``; returns the new logical_time."""
+#: Reserved workflow ID whose audit subcollection records Logical Clock
+#: advances (AUD-1: every state change is audited; the clock is state).
+CLOCK_AUDIT_WORKFLOW = "wf-system-clock"
+
+
+def advance_clock(db: Any, days: int, *, agent_identity: str = "forge-orchestrator") -> int:
+    """Advance simulated time by ``days``; returns the new logical_time.
+
+    The advance itself is audited (AUD-1) under ``wf-system-clock`` in the
+    same transaction as the clock write, so the jump is reconstructable from
+    Firestore alone (AUD-2/AUD-3).
+    """
     if days <= 0:
         raise ValueError("clock only advances")
 
     def _advance(txn: Any) -> int:
         doc = layout.txn_get_dict(txn, layout.clock_ref(db))
-        new_time = (int(doc["logical_time"]) if doc else 0) + days
+        old_time = int(doc["logical_time"]) if doc else 0
+        new_time = old_time + days
+        audit = build_audit_event(
+            workflow_id=CLOCK_AUDIT_WORKFLOW,
+            trace_id=deterministic_trace_id(CLOCK_AUDIT_WORKFLOW),
+            agent_identity=agent_identity,
+            event_kind="state_change",
+            reason_code="CLOCK_ADVANCED",
+            input_obj={"from": old_time, "days": days},
+            output_obj={"to": new_time},
+            effective_at=new_time,
+        )
         txn.set(layout.clock_ref(db), {"logical_time": new_time})
+        txn.create(
+            layout.audit_ref(db, CLOCK_AUDIT_WORKFLOW, audit["envelope"]["event_id"]),
+            audit,
+        )
         return new_time
 
     return layout.run_in_transaction(db, _advance)
@@ -70,28 +99,38 @@ def build_due_event(
     return message
 
 
-def emit_due_events(db: Any, *, logical_time: int, trace_id: str) -> list[str]:
-    """Enqueue due events for every workflow with ``due_at <= logical_time``.
+def emit_due_events(db: Any, *, trace_id: str) -> list[str]:
+    """Enqueue due events for every workflow whose due day has arrived.
 
-    Returns workflow_ids for which a NEW due event was enqueued. Each
-    enqueue is its own transaction keyed on a deterministic document ID, so
+    The logical time is read from the clock document — never trusted from a
+    caller. The collection scan is only a candidate list: each candidate is
+    RE-CHECKED transactionally (status is SUSPENDED_AWAITING_PART, due_at
+    still set and due against the clock read in the same transaction) before
+    the due event is created, so a stale scan or a caller race cannot emit
+    early or against changed state. Returns workflow_ids newly enqueued;
     re-running after a crash or a double-fired advance adds nothing.
     """
     emitted: list[str] = []
     for snapshot in db.collection("workflows").stream():
-        state = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
-        due_at = state.get("due_at")
-        if due_at is None or due_at > logical_time:
+        candidate = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+        if candidate.get("due_at") is None:
             continue
-        workflow_id = state["workflow_id"]
-        message = build_due_event(workflow_id=workflow_id, trace_id=trace_id, due_at=due_at)
-        event_id = message["envelope"]["event_id"]
+        workflow_id = candidate["workflow_id"]
 
-        def _enqueue(
-            txn: Any, wid: str = workflow_id, eid: str = event_id, msg: dict[str, Any] = message
-        ) -> bool:
-            doc = layout.txn_get_dict(txn, layout.outbox_ref(db, wid, eid))
-            if doc:
+        def _enqueue(txn: Any, wid: str = workflow_id) -> bool:
+            current = layout.txn_get_dict(txn, layout.workflow_ref(db, wid))
+            clock_doc = layout.txn_get_dict(txn, layout.clock_ref(db))
+            logical_now = int(clock_doc["logical_time"]) if clock_doc else 0
+            if (
+                not current
+                or current.get("status") != "SUSPENDED_AWAITING_PART"
+                or current.get("due_at") is None
+                or current["due_at"] > logical_now
+            ):
+                return False
+            msg = build_due_event(workflow_id=wid, trace_id=trace_id, due_at=current["due_at"])
+            eid = msg["envelope"]["event_id"]
+            if layout.txn_get_dict(txn, layout.outbox_ref(db, wid, eid)):
                 return False
             txn.create(
                 layout.outbox_ref(db, wid, eid),
