@@ -357,7 +357,6 @@ def test_expired_lease_takeover_discards_stale_plan_real_client(db):
 def test_day3_exit_assign_and_produce_real_client(db):
     """Day 3 exit criterion: Orchestrator assigns via registry discovery and
     both specialists return contract-valid outputs — on real Firestore."""
-    import json as _json
 
     from services.maintenance.handlers import make_handler as make_maintenance
     from services.orchestrator.handlers import make_nmc_handler
@@ -388,9 +387,11 @@ def test_day3_exit_assign_and_produce_real_client(db):
             "reported_at": "2026-08-21T09:00:00Z",
         },
     }
+    from adk_stub import stub_json
+
     orchestrator = make_nmc_handler(
         db,
-        model=lambda p: _json.dumps(
+        model=stub_json(
             {
                 "objectives": {
                     "maintenance": "Plan replacement of the failed actuator.",
@@ -421,9 +422,9 @@ def test_day3_exit_assign_and_produce_real_client(db):
     for assignment in assignments:
         role = assignment["payload"]["role"]
         handler = (
-            make_maintenance(lambda p: _json.dumps(plan_payload))
+            make_maintenance(db, stub_json(plan_payload))
             if role == "maintenance"
-            else make_supply(lambda p: _json.dumps(report_payload))
+            else make_supply(db, stub_json(report_payload))
         )
         assert process_message(db, assignment, handler, consumer_identity=f"forge-{role}")
     produced = [d.to_dict()["message"] for d in outbox_ref.stream()]

@@ -1,26 +1,34 @@
-"""Structured agent base: schema-constrained model output with bounded
-retries (AGT-7, PLT-1).
+"""Structured agent base on Google ADK: schema-constrained model output with
+bounded retries (PLT-2, AGT-7, PLT-1).
 
-Every specialist and the Orchestrator reason through :class:`StructuredAgent`.
-The model callable returns text; the base parses it as JSON, wraps it in an
-ICD-4 envelope, and contract-validates the FULL message — there is no
-raw-model-output-to-tool path. A malformed output is retried at most
-``MAX_RETRIES`` times (2), then the base returns a contract-valid
-``agent_failure_event.v2`` instead (AGT-7); the caller publishes it and never
-sees unvalidated model text.
+Model execution runs through Google ADK — ``LlmAgent`` driven by a
+``Runner`` with a fresh ``InMemorySessionService`` session per call (a fresh
+session is also what the spec means by a reserve worker's empty
+conversational state). Production passes a Vertex model string
+(``gemini-3.5-flash``, routed to Vertex via ``GOOGLE_GENAI_USE_VERTEXAI``);
+Lane 1 tests pass a ``BaseLlm`` stub — both take the identical ADK path, so
+the pipeline under test is the pipeline that ships (PLT-2).
 
-Prompts are versioned files in ``/prompts`` (PLT-1); the model callable is
-injected — stubbed in Lane 1 tests, live ``gemini-3.5-flash`` on Vertex in
-the deployed services. Model calls happen in bus handlers under the
+On top of ADK, :class:`StructuredAgent` enforces AGT-7: the final response
+text is parsed as JSON, wrapped in an ICD-4 envelope, and contract-validated
+in full — there is no raw-model-output-to-tool path. A malformed output is
+retried at most ``MAX_RETRIES`` times (2), then the base returns a
+contract-valid ``agent_failure_event.v2`` instead. Prompts are versioned
+files in ``/prompts`` (PLT-1). ADK calls happen in bus handlers under the
 claim/lease — never inside a transaction callback.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import uuid
 from pathlib import Path
 from typing import Any
+
+from google.adk.agents import LlmAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
 
 from forge_common.audit import now_iso
 from forge_common.contracts import ContractViolation, validate_message
@@ -31,6 +39,13 @@ PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 #: AGT-7: initial attempt + at most this many retries, then a failure event.
 MAX_RETRIES = 2
 
+_APP_NAME = "forge"
+_INSTRUCTION = (
+    "You are a FORGE agent operating on synthetic data. Follow the user "
+    "message exactly. Respond with ONLY the requested JSON object — no "
+    "prose, no code fences."
+)
+
 
 def load_prompt(name: str, variables: dict[str, Any]) -> str:
     """Load a versioned prompt file and substitute ``{{variable}}`` slots."""
@@ -38,6 +53,36 @@ def load_prompt(name: str, variables: dict[str, Any]) -> str:
     for key, value in variables.items():
         text = text.replace("{{" + key + "}}", str(value))
     return text
+
+
+class AdkTextRunner:
+    """One ADK ``LlmAgent`` + ``Runner``; each call is a fresh session.
+
+    ``model`` is a Vertex model string in production or a ``BaseLlm``
+    instance (stub) in tests — either way execution goes through ADK.
+    """
+
+    def __init__(self, *, name: str, model: Any):
+        self._agent = LlmAgent(
+            name=name.replace("-", "_"),
+            model=model,
+            instruction=_INSTRUCTION,
+        )
+        self._sessions = InMemorySessionService()
+        self._runner = Runner(app_name=_APP_NAME, agent=self._agent, session_service=self._sessions)
+
+    def __call__(self, prompt: str) -> str:
+        user_id = f"u-{uuid.uuid4().hex[:8]}"
+        session = self._sessions.create_session_sync(app_name=_APP_NAME, user_id=user_id)
+        final = ""
+        for event in self._runner.run(
+            user_id=user_id,
+            session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text=prompt)]),
+        ):
+            if event.is_final_response() and event.content and event.content.parts:
+                final = "".join(part.text or "" for part in event.content.parts)
+        return final
 
 
 class AgentOutputMalformed(Exception):
@@ -50,13 +95,13 @@ class AgentOutputMalformed(Exception):
 
 
 def constrained_json(
-    model: Callable[[str], str],
+    runner: AdkTextRunner,
     prompt: str,
     validator: Any,
     *,
     max_retries: int = MAX_RETRIES,
 ) -> dict[str, Any]:
-    """Schema-constrained model call for INTERNAL (non-bus) outputs (AGT-7).
+    """Schema-constrained ADK call for INTERNAL (non-bus) outputs (AGT-7).
 
     Used by the Orchestrator, whose reasoning output is an internal
     decomposition object, not a bus message (its bus outputs — the work
@@ -68,7 +113,7 @@ def constrained_json(
     last_error = ""
     while attempts <= max_retries:
         attempts += 1
-        raw = model(prompt)
+        raw = runner(prompt)
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -83,18 +128,12 @@ def constrained_json(
 
 
 class StructuredAgent:
-    """Wraps one model callable behind contract validation (AGT-7)."""
+    """One specialist role behind ADK execution + contract validation."""
 
-    def __init__(
-        self,
-        *,
-        agent_id: str,
-        role: str,
-        model: Callable[[str], str],
-    ):
+    def __init__(self, *, agent_id: str, role: str, model: Any):
         self.agent_id = agent_id
         self.role = role
-        self._model = model
+        self._runner = AdkTextRunner(name=agent_id, model=model)
 
     def run(
         self,
@@ -119,7 +158,7 @@ class StructuredAgent:
         last_error = ""
         while attempts <= MAX_RETRIES:
             attempts += 1
-            raw = self._model(prompt)
+            raw = self._runner(prompt)
             try:
                 payload = json.loads(raw)
                 if not isinstance(payload, dict):

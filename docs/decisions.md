@@ -156,3 +156,24 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   agent_failure_event — that schema's role enum is specialists-only, by
   design (ORC-4 governs specialist failures; the orchestrator's own retry
   path is the transport lease).
+
+## 2026-08-23 — Day 3 completion (entrant HOLD): real ADK + five gap fixes
+
+- **Google ADK is now the execution path (PLT-2).** `agent_base` builds an
+  ADK `LlmAgent` driven by a `Runner` with a fresh session per call;
+  production passes a Vertex model string, tests pass a `BaseLlm` stub
+  (`tests/adk_stub.py`) — identical pipeline either way. Live proof:
+  `scripts/smoke_adk_agent.py` (gemini-3.5-flash on Vertex → contract-valid
+  sourcing_report.v2), captured in docs/verification.
+- **No partial assignments.** The Orchestrator resolves EVERY required
+  capability before accumulating any write; any NoCapableAgent → BLOCKED
+  with zero assignments/claims.
+- **REG-2 transactional.** `check_claim_eligibility` re-reads definition +
+  instance INSIDE the committing transaction (reads before writes);
+  IneligibleAssignment → audited (ASSIGNMENT_INELIGIBLE) + NACK, so
+  redelivery re-discovers fresh state.
+- **Specialist runs audited (AUD-1)** atomically with their outbox message:
+  decision/DOMAIN_OUTPUT_PRODUCED or failure/SPECIALIST_MALFORMED.
+- **Orchestrator exhaustion bounded**: after AGT-7's limit →
+  ORCHESTRATOR_REASONING_EXHAUSTED escalation + BLOCKED (recovery via
+  BLOCKED → PLANNING), not a NACK loop.
