@@ -285,9 +285,9 @@ requirements:
     verification_method: document
   DFT-2:
     implemented_by:
-      - pending
+      - CLAUDE.md
     verified_by:
-      - pending
+      - CLAUDE.md
     verification_method: document
   DFT-3:
     implemented_by:

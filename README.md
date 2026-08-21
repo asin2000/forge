@@ -5,9 +5,10 @@ equipment for a **fictional** installation operating twelve GX-12 Ground
 Support Vehicles. Entry for the All Things Agentic Hackathon, **Fortified
 Enterprise Fleet** track, by Anansi Labs.
 
-**Governing baseline:** `FORGE-REQUIREMENTS.md` v1.1.2 (see project docs). If
-code and that document disagree, the document wins. Schedule:
-`FORGE-BUILD-PLAN.md`. Every module traces to a requirement ID via
+**Governing baseline:** `FORGE-REQUIREMENTS.md` v1.1.2 (repo root). If code
+and that document disagree, the document wins. Schedule:
+`FORGE-BUILD-PLAN.md` (repo root). AI-assisted sessions bootstrap from
+`CLAUDE.md` (DFT-2). Every module traces to a requirement ID via
 `requirements/traceability.yaml` (DFT-1).
 
 ## Clean statement (SUB-5)
