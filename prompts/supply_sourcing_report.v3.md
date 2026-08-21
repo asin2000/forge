@@ -13,7 +13,7 @@ and eta_days EXACTLY as listed; for a part not listed anywhere, report
 part_approved=false, shipment_status "not_ordered", eta_days 0:
 {{approved_parts_excerpt}}
 
-Respond with ONLY a JSON object, no prose, valid against sourcing_report.v2
+Respond with ONLY a JSON object, no prose, valid against sourcing_report.v3
 payload:
 {"part_number": "<UPPERCASE-PART>", "part_approved": true,
  "shipment_status": "not_ordered|ordered|in_transit|delayed|delivered",

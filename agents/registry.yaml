@@ -13,7 +13,7 @@ agents:
     capabilities: [workflow-orchestration]
     lifecycle_status: APPROVED
     contracts:
-      consumes: [nmc_event.v2, maintenance_action_plan.v2, sourcing_report.v2, roster_assignment.v2, validation_verdict.v2, quarantine_verdict.v2, approval_decision.v2, agent_failure_event.v2, due_event.v2]
+      consumes: [nmc_event.v2, maintenance_action_plan.v2, sourcing_report.v3, roster_assignment.v2, validation_verdict.v2, quarantine_verdict.v2, approval_decision.v2, agent_failure_event.v2, due_event.v2]
       produces: [work_package_assignment.v2, approval_request.v2, audit_event.v2]
     service_identity: forge-orchestrator@PROJECT_ID.iam.gserviceaccount.com
     endpoint: deploy-time
@@ -36,7 +36,7 @@ agents:
     lifecycle_status: APPROVED
     contracts:
       consumes: [work_package_assignment.v2]
-      produces: [sourcing_report.v2, audit_event.v2]
+      produces: [sourcing_report.v3, audit_event.v2]
     service_identity: forge-supply@PROJECT_ID.iam.gserviceaccount.com
     endpoint: deploy-time
     permitted_tools: [approved-parts-registry-read, pubsub-publish]
@@ -57,7 +57,7 @@ agents:
     capabilities: [action-validation]
     lifecycle_status: APPROVED
     contracts:
-      consumes: [maintenance_action_plan.v2, quarantine_verdict.v2, roster_assignment.v2, sourcing_report.v2]
+      consumes: [maintenance_action_plan.v2, quarantine_verdict.v2, roster_assignment.v2, sourcing_report.v3]
       produces: [validation_verdict.v2, audit_event.v2]
     service_identity: forge-safety@PROJECT_ID.iam.gserviceaccount.com
     endpoint: deploy-time

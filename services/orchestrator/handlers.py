@@ -263,15 +263,33 @@ def make_failure_handler(db: Any):
             return
         reserve = registry.find_reserve_instance(db, "workforce")
         if reserve is None:
-            _make_escalation(
-                db,
-                writes,
-                workflow_id=workflow_id,
-                trace_id=trace_id,
-                reason_code="RESERVE_UNAVAILABLE",
-                payload=payload,
-                error="workforce reserve is not available (ORC-3)",
-            )
+            # Same transactionally guarded disposition as other roles: if
+            # Workforce completed between this pre-read and the commit, the
+            # event is consumed with zero effects instead of blocking a
+            # completed workflow.
+            error = "workforce reserve is not available (ORC-3)"
+            writes.failure_disposition = {
+                "work_package_id": work_package_id,
+                "failed_instance_id": payload["agent_id"],
+                "transition": {
+                    "target": "BLOCKED_AGENT_FAILURE",
+                    "agent_identity": ORCHESTRATOR_IDENTITY,
+                    "trace_id": trace_id,
+                    "reason_code": "RESERVE_UNAVAILABLE",
+                    "detail": error,
+                },
+                "audit_event": build_audit_event(
+                    workflow_id=workflow_id,
+                    trace_id=trace_id,
+                    agent_identity=ORCHESTRATOR_IDENTITY,
+                    event_kind="escalation",
+                    reason_code="RESERVE_UNAVAILABLE",
+                    input_obj=payload,
+                    output_obj={"error": error},
+                    effective_at=read_clock(db),
+                    work_package_id=work_package_id,
+                ),
+            }
             return
         objective = (wp or {}).get("objective") or "Re-execute the failed work package."
         seq = int((wp or {}).get("assignment_seq", 1)) + 1
