@@ -68,15 +68,28 @@ jobs:
       - run: pip install -r requirements.lock && pip install -e . --no-deps
       - name: run integration tests against emulators
         run: |
-          gcloud emulators firestore start --host-port=127.0.0.1:8080 &
-          gcloud beta emulators pubsub start --project=demo-forge --host-port=127.0.0.1:8085 &
-          for i in $(seq 1 30); do
-            nc -z 127.0.0.1 8080 && nc -z 127.0.0.1 8085 && break
+          gcloud emulators firestore start --host-port=127.0.0.1:8080 \
+            > /tmp/firestore-emulator.log 2>&1 &
+          gcloud beta emulators pubsub start --project=demo-forge \
+            --host-port=127.0.0.1:8085 > /tmp/pubsub-emulator.log 2>&1 &
+          up=0
+          for i in $(seq 1 120); do
+            if nc -z 127.0.0.1 8080 && nc -z 127.0.0.1 8085; then up=1; break; fi
             sleep 1
           done
+          if [ "$up" != "1" ]; then
+            echo "::error::emulators failed to open ports within 120s"
+            echo "--- firestore emulator log ---"; cat /tmp/firestore-emulator.log
+            echo "--- pubsub emulator log ---"; cat /tmp/pubsub-emulator.log
+            exit 1
+          fi
           FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
           PUBSUB_EMULATOR_HOST=127.0.0.1:8085 \
-            pytest tests/emulator -q
+            pytest tests/emulator -q || {
+              echo "--- firestore emulator log (tail) ---"; tail -50 /tmp/firestore-emulator.log
+              echo "--- pubsub emulator log (tail) ---"; tail -50 /tmp/pubsub-emulator.log
+              exit 1
+            }
 
   traceability:
     name: "DFT-1 traceability gate"
