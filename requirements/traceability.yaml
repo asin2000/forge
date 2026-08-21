@@ -423,6 +423,7 @@ requirements:
   DAT-1:
     implemented_by:
       - infra/residency.yaml
+      - src/forge_common/pubsub.py
       - pending
     verified_by:
       - pending

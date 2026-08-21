@@ -791,3 +791,35 @@ def test_rejection_audit_fallbacks_are_pattern_safe():
     )
     assert len(docs) == 1
     assert docs[0].to_dict()["envelope"]["trace_id"] == "0" * 32
+
+
+def test_max_length_approval_comment_fits_audit_detail():
+    """A 1000-char comment must not overflow the audit detail cap."""
+    import json as _json
+
+    db = FakeFirestore()
+    make_workflow(db)
+    message = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            schema_version="approval_decision.v2",
+            event_id=deterministic_event_id("apr", WF, "apr-long-0001"),
+            trace_id=TRACE,
+            idempotency_key="idem-apr-long-0001",
+        ),
+        "payload": {
+            "approval_id": "apr-long-0001",
+            "action_type": "schedule_override",
+            "decision": "approved",
+            "approver_identity": "approver@example.test",
+            "decided_at": "2026-08-21T12:00:00Z",
+            "comment": "x" * 1000,
+        },
+    }
+    state.record_approval_decision(db, message)  # validates the audit it writes
+    trail = state.reconstruct_audit_trail(db, WF)
+    recorded = [e for e in trail if e["payload"]["reason_code"] == "APPROVAL_RECORDED"]
+    detail = _json.loads(recorded[0]["payload"]["detail"])
+    assert len(recorded[0]["payload"]["detail"]) <= 1000
+    assert detail["approval"]["comment_omitted"] is True
+    assert detail["approval"]["approver_identity"] == "approver@example.test"
