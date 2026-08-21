@@ -422,3 +422,323 @@ def make_plan_handler(db: Any):
         )
 
     return handle
+
+
+def _get_dict(ref: Any) -> dict[str, Any] | None:
+    snapshot = ref.get()
+    return snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+
+
+def _latest_outbox_payload(db: Any, workflow_id: str, schema_version: str) -> dict[str, Any] | None:
+    """Newest outbox message of a type for this workflow (evidence lookup)."""
+    best: dict[str, Any] | None = None
+    for snapshot in layout.workflow_ref(db, workflow_id).collection("outbox").stream():
+        record = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+        message = (record or {}).get("message", {})
+        if message.get("envelope", {}).get("schema_version") != schema_version:
+            continue
+        if best is None or record.get("enqueued_at", "") >= best.get("enqueued_at", ""):
+            best = record
+    return best["message"] if best else None
+
+
+RESUME_CONSTRAINT_PREFIX = "resume_on_day:"
+
+
+def build_approval_request(
+    *,
+    workflow_id: str,
+    trace_id: str,
+    action_type: str,
+    subject_event_id: str,
+    recommended_action: str,
+    source_refs: list[str],
+    extracted_facts: list[str],
+    applicable_rules: list[str],
+    constraints: list[str],
+    alternatives_considered: list[dict[str, str]],
+) -> dict[str, Any]:
+    """approval_request.v2 — the FULL HUM-2 decision record.
+
+    The recommendation is a deterministic function of the trusted safety
+    verdict (cited in source_refs), so confidence is 1.0 and versions name
+    the policy, not a model — the model-produced evidence keeps its own
+    provenance in the audit trail.
+    """
+    approval_id = (
+        f"apr-{deterministic_event_id('apr', workflow_id, action_type, subject_event_id)}"[:44]
+    )
+    message = {
+        "envelope": build_envelope(
+            workflow_id=workflow_id,
+            schema_version="approval_request.v2",
+            event_id=deterministic_event_id("apr-req", workflow_id, action_type, subject_event_id),
+            trace_id=trace_id,
+            idempotency_key=f"idem-apr-{action_type}-{subject_event_id[:8]}",
+        ),
+        "payload": {
+            "approval_id": approval_id,
+            "action_type": action_type,
+            "recommended_action": recommended_action[:500],
+            "source_refs": source_refs[:20],
+            "extracted_facts": [f[:500] for f in extracted_facts][:20],
+            "applicable_rules": applicable_rules[:20],
+            "constraints": [c[:500] for c in constraints][:20],
+            "confidence": 1.0,
+            "alternatives_considered": alternatives_considered[:10],
+            "versions": {
+                "agent_id": ORCHESTRATOR_IDENTITY,
+                "model_id": "deterministic-policy",
+                "prompt_version": "n/a",
+                "schema_version": "approval_request.v2",
+            },
+        },
+    }
+    validate_message(message)
+    return message
+
+
+def make_verdict_handler(db: Any):
+    """Handler for validation_verdict.v2: route a Safety verdict to the next
+    spine step and, when the next step is a HUM-1 gate, compose the
+    approval_request.v2 decision record IN THE SAME COMMIT as the transition
+    into the awaiting state (HUM-2 — the human always has the evidence).
+
+    - VALIDATING + approved  -> AWAITING_SCHEDULE_APPROVAL + schedule_override
+      request (resume day = clock + sourcing ETA; no sourcing evidence in the
+      workflow outbox means the override request would be unfounded ->
+      escalation instead).
+    - VALIDATING + vetoed    -> PLANNING (rework, audited with the reasons).
+    - ASSEMBLY_RESUMED + approved -> AWAITING_RELEASE_APPROVAL +
+      equipment_release request.
+    - ASSEMBLY_RESUMED + vetoed   -> BLOCKED_AGENT_FAILURE (human attention).
+    - Any other state: the verdict is stale — audited no-op, never a NACK
+      loop. apply_transition re-validates the edge transactionally, so a
+      state raced between the read here and the commit aborts safely and the
+      redelivery re-reads.
+    """
+
+    def handle(message: dict[str, Any], writes: TxnWrites) -> None:
+        envelope = message["envelope"]
+        verdict = message["payload"]
+        workflow_id = envelope["workflow_id"]
+        trace_id = envelope["trace_id"]
+        wf = _get_dict(layout.workflow_ref(db, workflow_id))
+        status = (wf or {}).get("status")
+        approved = verdict["verdict"] == "approved"
+
+        def _audit_only(reason_code: str, note: str) -> None:
+            writes.audit_events.append(
+                build_audit_event(
+                    workflow_id=workflow_id,
+                    trace_id=trace_id,
+                    agent_identity=ORCHESTRATOR_IDENTITY,
+                    event_kind="escalation",
+                    reason_code=reason_code,
+                    input_obj=verdict,
+                    output_obj={"note": note, "status": status},
+                    effective_at=read_clock(db),
+                )
+            )
+
+        if status == "VALIDATING" and approved:
+            sourcing = _latest_outbox_payload(db, workflow_id, "sourcing_report.v3")
+            if sourcing is None:
+                _make_escalation(
+                    db,
+                    writes,
+                    workflow_id=workflow_id,
+                    trace_id=trace_id,
+                    reason_code="NO_SOURCING_EVIDENCE",
+                    payload=verdict,
+                    error="schedule_override request requires a sourcing report ETA",
+                )
+                return
+            report = sourcing["payload"]
+            resume_day = read_clock(db) + int(report["eta_days"])
+            request = build_approval_request(
+                workflow_id=workflow_id,
+                trace_id=trace_id,
+                action_type="schedule_override",
+                subject_event_id=verdict["subject_event_id"],
+                recommended_action=(
+                    f"Suspend {wf['equipment_id']} awaiting part {report['part_number']} "
+                    f"(ETA {report['eta_days']} days); resume assembly on day {resume_day}."
+                ),
+                source_refs=[
+                    f"validation_verdict:{envelope['event_id']}",
+                    f"sourcing_report:{sourcing['envelope']['event_id']}",
+                    f"workflow:{workflow_id}",
+                ],
+                extracted_facts=[
+                    f"part {report['part_number']} approved={report['part_approved']} "
+                    f"shipment={report['shipment_status']} eta_days={report['eta_days']}",
+                    *verdict["reasons"],
+                ],
+                applicable_rules=verdict["rule_refs"],
+                constraints=[
+                    f"{RESUME_CONSTRAINT_PREFIX}{resume_day}",
+                    "no substitution: Supply cannot approve substitutions or purchases (AGT-2)",
+                ],
+                alternatives_considered=[
+                    {
+                        "option": "reject the schedule override and return to planning",
+                        "rejected_reason": "safety verdict approved the plan; the only "
+                        "blocker is the part ETA reported from supply-chain data",
+                    }
+                ],
+            )
+            writes.outbox_messages.append(request)
+            writes.transition = {
+                "target": "AWAITING_SCHEDULE_APPROVAL",
+                "agent_identity": ORCHESTRATOR_IDENTITY,
+                "trace_id": trace_id,
+                "reason_code": "VERDICT_APPROVED",
+                "detail": bounded_json_detail({"approval_id": request["payload"]["approval_id"]}),
+            }
+        elif status == "VALIDATING" and not approved:
+            writes.transition = {
+                "target": "PLANNING",
+                "agent_identity": ORCHESTRATOR_IDENTITY,
+                "trace_id": trace_id,
+                "reason_code": "VERDICT_VETOED",
+                "detail": bounded_json_detail({"reasons": verdict["reasons"]}),
+            }
+        elif status == "ASSEMBLY_RESUMED" and approved:
+            request = build_approval_request(
+                workflow_id=workflow_id,
+                trace_id=trace_id,
+                action_type="equipment_release",
+                subject_event_id=verdict["subject_event_id"],
+                recommended_action=(
+                    f"Release {wf['equipment_id']} to service: post-repair validation "
+                    "verdict approved."
+                ),
+                source_refs=[
+                    f"validation_verdict:{envelope['event_id']}",
+                    f"workflow:{workflow_id}",
+                ],
+                extracted_facts=list(verdict["reasons"]),
+                applicable_rules=verdict["rule_refs"],
+                constraints=["release requires HUM-1 equipment_release approval"],
+                alternatives_considered=[
+                    {
+                        "option": "return the equipment to rework",
+                        "rejected_reason": "the safety verdict on the completed repair "
+                        "is approved with no violations",
+                    }
+                ],
+            )
+            writes.outbox_messages.append(request)
+            writes.transition = {
+                "target": "AWAITING_RELEASE_APPROVAL",
+                "agent_identity": ORCHESTRATOR_IDENTITY,
+                "trace_id": trace_id,
+                "reason_code": "VERDICT_APPROVED",
+                "detail": bounded_json_detail({"approval_id": request["payload"]["approval_id"]}),
+            }
+        elif status == "ASSEMBLY_RESUMED":
+            _make_escalation(
+                db,
+                writes,
+                workflow_id=workflow_id,
+                trace_id=trace_id,
+                reason_code="RELEASE_VERDICT_VETOED",
+                payload=verdict,
+                error="; ".join(verdict["reasons"])[:1000],
+            )
+        else:
+            _audit_only("VERDICT_STALE", "verdict arrived for a workflow not awaiting one")
+
+    return handle
+
+
+def make_decision_handler(db: Any):
+    """Handler for approval_decision.v2 (the bus copy the approval surface
+    enqueued atomically with the authoritative record): apply the human's
+    decision to the spine.
+
+    The gated transitions pass approval_id through apply_transition, which
+    transactionally retrieves the RECORDED approval and consumes it once —
+    a replayed or forged decision message cannot release equipment (HUM-1).
+    A decision for a workflow no longer in the awaiting state is an audited
+    no-op (never a NACK loop).
+    """
+
+    def handle(message: dict[str, Any], writes: TxnWrites) -> None:
+        envelope = message["envelope"]
+        decision = message["payload"]
+        workflow_id = envelope["workflow_id"]
+        trace_id = envelope["trace_id"]
+        wf = _get_dict(layout.workflow_ref(db, workflow_id))
+        status = (wf or {}).get("status")
+        approved = decision["decision"] == "approved"
+        action = decision["action_type"]
+
+        def _audit_only(reason_code: str, note: str) -> None:
+            writes.audit_events.append(
+                build_audit_event(
+                    workflow_id=workflow_id,
+                    trace_id=trace_id,
+                    agent_identity=ORCHESTRATOR_IDENTITY,
+                    event_kind="escalation",
+                    reason_code=reason_code,
+                    input_obj=decision,
+                    output_obj={"note": note, "status": status},
+                    effective_at=read_clock(db),
+                )
+            )
+
+        if action == "schedule_override" and status == "AWAITING_SCHEDULE_APPROVAL":
+            if not approved:
+                writes.transition = {
+                    "target": "PLANNING",
+                    "agent_identity": ORCHESTRATOR_IDENTITY,
+                    "trace_id": trace_id,
+                    "reason_code": "APPROVAL_REJECTED",
+                    "detail": bounded_json_detail({"approval_id": decision["approval_id"]}),
+                }
+                return
+            request = _latest_outbox_payload(db, workflow_id, "approval_request.v2")
+            resume_day = None
+            if request and request["payload"]["approval_id"] == decision["approval_id"]:
+                for constraint in request["payload"]["constraints"]:
+                    if constraint.startswith(RESUME_CONSTRAINT_PREFIX):
+                        resume_day = int(constraint.removeprefix(RESUME_CONSTRAINT_PREFIX))
+            if resume_day is None:
+                _audit_only(
+                    "DECISION_UNROUTABLE",
+                    "approved schedule_override has no matching request with a resume day",
+                )
+                return
+            writes.transition = {
+                "target": "SUSPENDED_AWAITING_PART",
+                "agent_identity": ORCHESTRATOR_IDENTITY,
+                "trace_id": trace_id,
+                "reason_code": "SCHEDULE_OVERRIDE_APPROVED",
+                "approval_id": decision["approval_id"],
+                "due_at": resume_day,
+                "detail": bounded_json_detail({"resume_on_day": resume_day}),
+            }
+        elif action == "equipment_release" and status == "AWAITING_RELEASE_APPROVAL":
+            if approved:
+                writes.transition = {
+                    "target": "RELEASED",
+                    "agent_identity": ORCHESTRATOR_IDENTITY,
+                    "trace_id": trace_id,
+                    "reason_code": "RELEASE_APPROVED",
+                    "approval_id": decision["approval_id"],
+                    "detail": bounded_json_detail({"approver": decision["approver_identity"]}),
+                }
+            else:
+                writes.transition = {
+                    "target": "ASSEMBLY_RESUMED",
+                    "agent_identity": ORCHESTRATOR_IDENTITY,
+                    "trace_id": trace_id,
+                    "reason_code": "APPROVAL_REJECTED",
+                    "detail": bounded_json_detail({"approval_id": decision["approval_id"]}),
+                }
+        else:
+            _audit_only("DECISION_STALE", f"{action} decision for workflow in {status}")
+
+    return handle

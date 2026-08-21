@@ -367,6 +367,7 @@ def test_day3_exit_assign_and_produce_real_client(db):
     from forge_common.messages import build_envelope, deterministic_event_id
 
     registry.load_registry(db)
+    reset_specialist_instances(db)
     wf = unique_wf()
     trace = deterministic_trace_id(wf)
     state.create_workflow(
@@ -443,6 +444,16 @@ def reset_workforce_instances(db):
 
     registry.instance_ref(db, "agent-workforce-01").set({"state": "IDLE"}, merge=True)
     registry.instance_ref(db, "agent-workforce-02").set({"state": "RESERVE"}, merge=True)
+
+
+def reset_specialist_instances(db):
+    """Same, for maintenance/supply: failure-injection tests leave them
+    FAILED, which breaks discovery in a SECOND suite run against the same
+    emulator (fresh CI emulators never see this; local reruns do)."""
+    from forge_common import registry
+
+    registry.instance_ref(db, "agent-maintenance-01").set({"state": "IDLE"}, merge=True)
+    registry.instance_ref(db, "agent-supply-01").set({"state": "IDLE"}, merge=True)
 
 
 def test_reg2_race_rejected_on_real_client(db):
@@ -555,6 +566,7 @@ def test_day4_closeout_full_flow_real_client(db):
     from forge_common import registry
 
     registry.load_registry(db)
+    reset_specialist_instances(db)
     reset_workforce_instances(db)
     wf = unique_wf()
     trace = deterministic_trace_id(wf)
@@ -1384,3 +1396,205 @@ def test_quarantine_ingest_atomicity_and_recovery_real_client(db):
     )
     assert store.get(doc2)["status"] == "QUARANTINED"
     assert len(quarantine_audits()) == 2  # one per document, exactly
+
+
+# ---------- Day 6: approval surface + gate handlers on the real client ----------
+
+
+def walk_to(db, workflow_id, targets, *, trace, **last_kwargs):
+    from forge_common import layout
+
+    for i, target in enumerate(targets):
+        kwargs = last_kwargs if i == len(targets) - 1 else {}
+
+        def _apply(txn, target=target, kwargs=kwargs):
+            return state.apply_transition(
+                txn,
+                db,
+                workflow_id=workflow_id,
+                target=target,
+                agent_identity="forge-orchestrator",
+                trace_id=trace,
+                reason_code="TEST_WALK",
+                **kwargs,
+            )
+
+        layout.run_in_transaction(db, _apply)
+
+
+def test_decision_outbox_rides_recording_txn_real_client(db):
+    """Day 6: enqueue_outbox=True commits the bus copy in the SAME real
+    transaction as the authoritative record + audit (the lazy-begin /
+    leading-read class of bug only shows on the real client)."""
+    from forge_common import layout
+
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    approval_id = "apr-emu-outbox-1"
+    message = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            schema_version="approval_decision.v2",
+            event_id=deterministic_event_id("apr", wf, approval_id),
+            trace_id=trace,
+            idempotency_key=f"idem-{approval_id}",
+        ),
+        "payload": {
+            "approval_id": approval_id,
+            "action_type": "equipment_release",
+            "decision": "approved",
+            "approver_identity": "approver@example.test",
+            "decided_at": "2026-08-21T12:00:00Z",
+        },
+    }
+    state.record_approval_decision(db, message, enqueue_outbox=True)
+    assert layout.approval_ref(db, wf, approval_id).get().to_dict() is not None
+    outbox = [
+        s.to_dict()["message"]
+        for s in db.collection("workflows").document(wf).collection("outbox").stream()
+    ]
+    assert [m["payload"]["approval_id"] for m in outbox] == [approval_id]
+    audits = [
+        s.to_dict()["payload"]["reason_code"]
+        for s in db.collection("workflows").document(wf).collection("audit").stream()
+    ]
+    assert "APPROVAL_RECORDED" in audits
+    # duplicate recording is refused and adds NOTHING (no second outbox copy)
+    with pytest.raises(state.GateBlocked):
+        state.record_approval_decision(db, message, enqueue_outbox=True)
+    outbox_after = list(db.collection("workflows").document(wf).collection("outbox").stream())
+    assert len(outbox_after) == 1
+
+
+def test_day6_dashboard_gate_loop_real_client(db):
+    """Day 6 exit: verdict -> HUM-2 request (same commit as the gate entry)
+    -> dashboard decide (principal identity) -> decision handler consumes
+    the recorded approval ONCE -> RELEASED, all on the real client."""
+    from fastapi.testclient import TestClient
+    from services.dashboard.app import create_app
+    from services.dashboard.auth import IAP_HEADER
+    from services.orchestrator.handlers import make_decision_handler, make_verdict_handler
+
+    from forge_common import layout
+    from forge_common.audit import now_iso
+    from forge_common.contracts import validate_message
+
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    layout.clock_ref(db).set({"logical_time": 0})
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    walk_to(db, wf, ["PLANNING", "VALIDATING"], trace=trace)
+    sourcing = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            work_package_id=f"wp-supply-{wf.removeprefix('wf-')}"[:40],
+            schema_version="sourcing_report.v3",
+            event_id=deterministic_event_id("emu-sourcing", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-emu-sourcing-{wf[-8:]}",
+        ),
+        "payload": {
+            "part_number": "HYD-ACT-4402",
+            "part_approved": True,
+            "shipment_status": "delayed",
+            "eta_days": 21,
+        },
+    }
+    validate_message(sourcing)
+    layout.outbox_ref(db, wf, sourcing["envelope"]["event_id"]).set(
+        {"message": sourcing, "published": False, "enqueued_at": now_iso()}
+    )
+
+    def verdict(subject):
+        message = {
+            "envelope": build_envelope(
+                workflow_id=wf,
+                schema_version="validation_verdict.v2",
+                event_id=deterministic_event_id("emu-verdict", wf, subject),
+                trace_id=trace,
+                idempotency_key=f"idem-emu-verdict-{subject}-{wf[-8:]}",
+            ),
+            "payload": {
+                "subject_event_id": deterministic_event_id("emu-subject", wf, subject),
+                "verdict": "approved",
+                "rule_refs": ["SP-PART-001"],
+                "reasons": ["approved parts only"],
+            },
+        }
+        validate_message(message)
+        return message
+
+    def pending(client):
+        return client.get(f"/api/workflows/{wf}").json()["pending_approvals"]
+
+    def decision_copy(approval_id):
+        for snapshot in db.collection("workflows").document(wf).collection("outbox").stream():
+            message = snapshot.to_dict()["message"]
+            if (
+                message["envelope"]["schema_version"] == "approval_decision.v2"
+                and message["payload"]["approval_id"] == approval_id
+            ):
+                return message
+        raise AssertionError("no bus copy of the decision")
+
+    client = TestClient(create_app(db))
+    headers = {IAP_HEADER: "accounts.google.com:approver@example.test"}
+    process_message(
+        db, verdict("plan"), make_verdict_handler(db), consumer_identity="forge-orchestrator"
+    )
+    assert layout.workflow_ref(db, wf).get().to_dict()["status"] == "AWAITING_SCHEDULE_APPROVAL"
+    (request,) = pending(client)
+    assert request["action_type"] == "schedule_override"
+    assert (
+        client.post(
+            f"/api/workflows/{wf}/decide",
+            headers=headers,
+            json={"approval_id": request["approval_id"], "decision": "approved"},
+        ).status_code
+        == 200
+    )
+    process_message(
+        db,
+        decision_copy(request["approval_id"]),
+        make_decision_handler(db),
+        consumer_identity="forge-orchestrator",
+    )
+    doc = layout.workflow_ref(db, wf).get().to_dict()
+    assert (doc["status"], doc["due_at"]) == ("SUSPENDED_AWAITING_PART", 21)
+
+    walk_to(db, wf, ["ASSEMBLY_RESUMED"], trace=trace)
+    process_message(
+        db, verdict("repair"), make_verdict_handler(db), consumer_identity="forge-orchestrator"
+    )
+    (release,) = pending(client)
+    assert release["action_type"] == "equipment_release"
+    assert (
+        client.post(
+            f"/api/workflows/{wf}/decide",
+            headers=headers,
+            json={"approval_id": release["approval_id"], "decision": "approved"},
+        ).status_code
+        == 200
+    )
+    release_decision = decision_copy(release["approval_id"])
+    process_message(
+        db, release_decision, make_decision_handler(db), consumer_identity="forge-orchestrator"
+    )
+    assert layout.workflow_ref(db, wf).get().to_dict()["status"] == "RELEASED"
+    assert layout.consumed_approval_ref(db, wf, release["approval_id"]).get().to_dict() is not None
+    # a replayed decision under a fresh event_id cannot double-consume: RELEASED holds
+    replay = {
+        "envelope": {
+            **release_decision["envelope"],
+            "event_id": deterministic_event_id("emu-replay", wf),
+            "idempotency_key": f"idem-emu-replay-{wf[-8:]}",
+        },
+        "payload": release_decision["payload"],
+    }
+    process_message(db, replay, make_decision_handler(db), consumer_identity="forge-orchestrator")
+    assert layout.workflow_ref(db, wf).get().to_dict()["status"] == "RELEASED"

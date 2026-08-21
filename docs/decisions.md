@@ -364,3 +364,57 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
 - Honest-scope fix: removed the claim that emulator barrier tests cover
   GCS ingestion concurrency — the GCS conflict test is correctly
   sequential (precondition loser).
+
+## 2026-08-21 (build-day 6) — Human gate, dashboard, spine gate handlers, Gemma no-go
+
+- HUM-1 approval surface: FastAPI service (services/dashboard) behind Cloud
+  Run IAM/IAP. Approver identity derives ONLY from the authenticated
+  principal (IAP header, else Google-verified ID token); client-supplied
+  approver_identity is rejected with 400. record_approval_decision is the
+  single writer and now (enqueue_outbox=True) creates the bus copy of the
+  decision in the SAME transaction as the authoritative record and its
+  APPROVAL_RECORDED audit.
+- HUM-2 producer: approval_request.v2 was a contract with no producer. The
+  orchestrator verdict handler now composes the full decision record
+  (source refs, extracted facts, cited SP rules, constraints, confidence,
+  alternatives, versions) IN THE SAME COMMIT as the transition into the
+  awaiting state — a workflow can never sit at a gate without its evidence.
+  Composition is a deterministic function of the trusted Safety verdict
+  (versions.model_id: deterministic-policy); the model-produced evidence
+  keeps its own provenance via source_refs into the audit trail.
+- Spine gate handlers: validation_verdict.v2 routes VALIDATING->
+  AWAITING_SCHEDULE_APPROVAL (schedule_override request; resume day =
+  clock + sourcing ETA; missing sourcing evidence escalates instead of
+  fabricating an ETA) and ASSEMBLY_RESUMED->AWAITING_RELEASE_APPROVAL
+  (equipment_release). approval_decision.v2 applies the human decision:
+  approved release consumes the recorded approval once (RELEASED); a
+  rejected release returns to rework; stale/replayed decisions are audited
+  no-ops, never NACK loops.
+- REG-4 catalog: dashboard renders definitions + instances with health
+  DERIVED from heartbeat staleness at read time (never stored).
+- CI-9 config gate: scripts/check_config.py cross-checks registry.yaml
+  (role coverage, ACTIVE contracts, per-role identity pattern) and every
+  region literal in infra scripts against the DAT-1 location map. Seventh
+  CI job.
+- PLT-5 decision gate (today): NO-GO on Gemma. Live probe from the project
+  hit 404 on every serverless candidate (gemma-3-27b-it / -12b-it /
+  google/gemma-3-27b-it at us, us-central1, global) — Gemma on Vertex
+  requires a dedicated Model Garden GPU endpoint (quota, cost, new DAT-1
+  entry). Per PLT-5, the tool-less gemini-3.5-flash classifier satisfies
+  SEC-3 and the Gemma model-integration bonus route is forfeited.
+- Smoke-cleanup rider (PR #16 GO): smoke_quarantine_live.py now uses a
+  UNIQUE workflow id per run and registers cleanup via atexit (try/finally
+  equivalent), deleting only the current run's records even when an
+  assertion fails mid-smoke.
+- Live production finding (Cloud Run revision 00001): Cloud Run IAM
+  verifies the caller ID token and forwards it with the SIGNATURE STRIPPED
+  — in-container re-verification is structurally impossible
+  (MalformedError), and the unhandled failure was a 500. Fixed: verifier
+  failures map to 401 (never 500), and behind Cloud Run IAM the deploy
+  sets TRUST_PLATFORM_AUTH=1 so identity is read from the
+  platform-validated token claims (issuer/verified-email/expiry still
+  enforced) — safe only under --no-allow-unauthenticated. Three unit
+  regressions including the flag-off path.
+- deploy.sh clean-project findings: SA creation quota is 5/minute (429) —
+  the script now backs off and retries; impersonation-based IAM testing
+  needs iamcredentials.googleapis.com (harness prerequisite only).

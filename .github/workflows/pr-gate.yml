@@ -95,6 +95,17 @@ jobs:
               exit 1
             }
 
+  config:
+    name: "CI-9 config gate (registry + residency)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.lock
+      - run: python scripts/check_config.py
+
   traceability:
     name: "DFT-1 traceability gate"
     runs-on: ubuntu-latest

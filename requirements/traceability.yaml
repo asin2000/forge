@@ -142,19 +142,23 @@ requirements:
     implemented_by:
       - contracts/approval_decision.v2.schema.json
       - src/forge_common/state.py
-      - pending
+      - services/dashboard/auth.py
+      - services/dashboard/app.py
+      - infra/deploy.sh
     verified_by:
       - tests/test_contracts.py
       - tests/test_state_and_messaging.py
-      - pending
+      - tests/test_day6_dashboard.py
+      - tests/emulator/test_emulator_integration.py
     verification_method: test
   HUM-2:
     implemented_by:
       - contracts/approval_request.v2.schema.json
-      - pending
+      - services/orchestrator/handlers.py
+      - services/dashboard/ui.py
     verified_by:
       - tests/test_contracts.py
-      - pending
+      - tests/test_day6_dashboard.py
     verification_method: test
   AUD-1:
     implemented_by:
@@ -262,14 +266,15 @@ requirements:
   PLT-5:
     implemented_by:
       - services/cyber_trust/handlers.py
-      - pending
+      - docs/decisions.md
     verified_by:
       - tests/test_day5_quarantine.py
-      - pending
+      - docs/verification/2026-08-21-day6-live.md
     verification_method: inspection
   PLT-6:
     implemented_by:
-      - pending
+      - infra/deploy.sh
+      - Dockerfile
     verified_by:
       - pending
     verification_method: test
@@ -426,9 +431,10 @@ requirements:
     verification_method: test
   REG-4:
     implemented_by:
-      - pending
+      - services/dashboard/app.py
+      - services/dashboard/ui.py
     verified_by:
-      - pending
+      - tests/test_day6_dashboard.py
     verification_method: demonstration
   REG-5:
     implemented_by:
@@ -475,7 +481,8 @@ requirements:
     verification_method: inspection
   CI-9:
     implemented_by:
-      - pending
+      - scripts/check_config.py
+      - .github/workflows/pr-gate.yml
     verified_by:
-      - pending
+      - .github/workflows/pr-gate.yml
     verification_method: test
