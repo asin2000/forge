@@ -323,3 +323,60 @@ def apply_wp_status_update(
         {**plan["work_package"], "status": status, "status_observed_at": now_iso()},
     )
     return True
+
+
+def check_failure_disposition(
+    txn: Any,
+    db: Any,
+    *,
+    workflow_id: str,
+    work_package_id: str,
+    failed_instance_id: str,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """READS ONLY: decide whether a non-reserve failure disposition applies.
+
+    Skips — consuming the event with ZERO effects — when the package
+    completed or ownership moved on between the handler's pre-read and this
+    commit (the race entrant review flagged: a completed Maintenance/Supply
+    package must never produce a blocked workflow)."""
+    wp = layout.txn_get_dict(txn, layout.work_package_ref(db, workflow_id, work_package_id))
+    if wp and (
+        wp.get("status") == "COMPLETED" or wp.get("owner_instance_id") != failed_instance_id
+    ):
+        return {"skip": True}
+    return {"skip": False, "work_package": wp}
+
+
+def apply_failure_disposition(
+    txn: Any,
+    db: Any,
+    *,
+    workflow_id: str,
+    work_package_id: str,
+    failed_instance_id: str,
+    audit_event: dict[str, Any],
+    plan: dict[str, Any],
+    **_ignored: Any,
+) -> bool:
+    """WRITES ONLY (transition applied separately by the bus, before other
+    writes): mark the package and instance FAILED and write the escalation
+    audit — atomically with the workflow block."""
+    if plan.get("skip"):
+        return False
+    wp = plan.get("work_package")
+    if wp:
+        txn.set(
+            layout.work_package_ref(db, workflow_id, work_package_id),
+            {**wp, "status": "FAILED", "status_observed_at": now_iso()},
+        )
+    txn.set(
+        instance_ref(db, failed_instance_id),
+        {"state": "FAILED", "state_changed_observed_at": now_iso()},
+        merge=True,
+    )
+    txn.create(
+        layout.audit_ref(db, workflow_id, audit_event["envelope"]["event_id"]),
+        audit_event,
+    )
+    return True

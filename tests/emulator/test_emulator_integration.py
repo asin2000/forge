@@ -430,7 +430,7 @@ def test_day3_exit_assign_and_produce_real_client(db):
     produced = [d.to_dict()["message"] for d in outbox_ref.stream()]
     schemas = sorted(m["envelope"]["schema_version"] for m in produced)
     assert schemas.count("maintenance_action_plan.v2") == 1
-    assert schemas.count("sourcing_report.v2") == 1
+    assert schemas.count("sourcing_report.v3") == 1
     for message in produced:
         validate_message(message)
 
@@ -684,3 +684,307 @@ def test_day4_closeout_full_flow_real_client(db):
     assert len(state.reconstruct_audit_trail(db, wf)) == trail_before
     assert len(outbox()) == outbox_before
     assert wp("workforce")["owner_instance_id"] == "agent-workforce-02"
+
+
+def test_stale_worker_barrier_real_client(db):
+    """Race blocker 1 on REAL Firestore: the primary prepares its result,
+    the monitor reassigns to the reserve mid-flight, the primary finishes —
+    nothing of the primary's lands; only the reserve completes the package."""
+    import threading
+
+    from services.orchestrator.handlers import make_failure_handler
+    from services.orchestrator.monitor import run_monitoring_cycle
+    from services.workforce.handlers import make_handler as make_workforce
+
+    from adk_stub import stub_json
+    from forge_common import layout, registry
+
+    registry.load_registry(db)
+    reset_workforce_instances(db)
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    wp_id = f"wp-workforce-{wf.removeprefix('wf-')}"
+    inputs = {"task_codes": ["TC-101"], "equipment_id": "GX12-07", "plan_id": "plan-x1"}
+
+    def _claim(txn):
+        registry.claim_work_package(
+            txn,
+            db,
+            workflow_id=wf,
+            work_package_id=wp_id,
+            instance_id="agent-workforce-01",
+            role="workforce",
+            objective="Staff the plan.",
+            inputs=inputs,
+        )
+
+    layout.run_in_transaction(db, _claim)
+    workflow_ref = db.collection("workflows").document(wf)
+    assignment = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            work_package_id=wp_id,
+            schema_version="work_package_assignment.v2",
+            event_id=deterministic_event_id("barrier-assign", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-barrier-assign-{wf}",
+        ),
+        "payload": {
+            "role": "workforce",
+            "objective": "Staff the plan.",
+            "assigned_agent_id": "agent-workforce-01",
+            "assignment_seq": 1,
+            "inputs": inputs,
+        },
+    }
+    roster = {
+        "assignments": [
+            {
+                "task_code": "TC-101",
+                "technician_id": "T-1001",
+                "qualification_id": "Q-HYD-101",
+                "shift": "day",
+            }
+        ]
+    }
+    prepared, release = threading.Event(), threading.Event()
+    inner = make_workforce(db, stub_json(roster))
+    results = {}
+
+    def slow_primary(msg, writes):
+        inner(msg, writes)  # full owned bundle prepared
+        prepared.set()
+        assert release.wait(timeout=30)
+
+    def worker():
+        results["primary"] = process_message(
+            db, assignment, slow_primary, consumer_identity="forge-workforce"
+        )
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    assert prepared.wait(timeout=30)
+
+    # Mid-flight: monitor times the primary out; reserve takes over.
+    wp_ref = workflow_ref.collection("work_packages").document(wp_id)
+    wp_ref.set({**wp_ref.get().to_dict(), "assigned_observed_at": "2026-08-21T00:00:00.000000Z"})
+    run_monitoring_cycle(db, trace_id_for=lambda w: trace, now="2026-08-21T09:00:00.000000Z")
+    timeout_event = next(
+        d.to_dict()["message"]
+        for d in workflow_ref.collection("outbox").stream()
+        if d.to_dict()["message"]["envelope"]["schema_version"] == "agent_failure_event.v2"
+    )
+    assert process_message(
+        db, timeout_event, make_failure_handler(db), consumer_identity="forge-orchestrator"
+    )
+    assert wp_ref.get().to_dict()["owner_instance_id"] == "agent-workforce-02"
+
+    release.set()
+    thread.join(timeout=30)
+    assert results["primary"] is True  # consumed — but nothing landed:
+    outbox = [d.to_dict()["message"] for d in workflow_ref.collection("outbox").stream()]
+    rosters = [m for m in outbox if m["envelope"]["schema_version"] == "roster_assignment.v2"]
+    assert rosters == []
+    trail = state.reconstruct_audit_trail(db, wf)
+    assert all(
+        e["payload"]["agent_identity"] != "agent-workforce-01"
+        or e["payload"]["reason_code"] != "DOMAIN_OUTPUT_PRODUCED"
+        for e in trail
+    )
+    assert wp_ref.get().to_dict()["status"] == "ASSIGNED"
+
+    # Only the reserve can complete: process the seq-2 assignment.
+    seq2 = next(
+        m
+        for m in outbox
+        if m["envelope"]["schema_version"] == "work_package_assignment.v2"
+        and m["payload"].get("reassigned_from")
+    )
+    assert process_message(
+        db, seq2, make_workforce(db, stub_json(roster)), consumer_identity="forge-workforce"
+    )
+    final = wp_ref.get().to_dict()
+    assert final["status"] == "COMPLETED"
+    assert final["owner_instance_id"] == "agent-workforce-02"
+    rosters = [
+        d.to_dict()["message"]
+        for d in workflow_ref.collection("outbox").stream()
+        if d.to_dict()["message"]["envelope"]["schema_version"] == "roster_assignment.v2"
+    ]
+    assert len(rosters) == 1
+    assert rosters[0]["payload"] == roster
+
+
+def test_failure_disposition_both_interleavings_real_client(db):
+    """Race blocker 2 on REAL Firestore: (a) completion between pre-read and
+    commit -> zero effects; (b) still-assigned -> blocked + FAILED marks."""
+    import threading
+
+    from services.orchestrator.handlers import make_failure_handler
+    from services.supply.handlers import make_handler as make_supply
+
+    from adk_stub import stub_json
+    from forge_common import layout, registry
+
+    registry.load_registry(db)
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    wp_id = f"wp-supply-{wf.removeprefix('wf-')}"
+    nmc_inputs = {
+        "equipment_id": "GX12-07",
+        "discrepancy_code": "DSC-0042",
+        "description": "Failed hydraulic actuator",
+        "reported_at": "2026-08-21T09:00:00Z",
+    }
+
+    def _claim(txn):
+        registry.claim_work_package(
+            txn,
+            db,
+            workflow_id=wf,
+            work_package_id=wp_id,
+            instance_id="agent-supply-01",
+            role="supply",
+            objective="Source the actuator.",
+            inputs=nmc_inputs,
+        )
+
+    layout.run_in_transaction(db, _claim)
+    workflow_ref = db.collection("workflows").document(wf)
+
+    failure = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            work_package_id=wp_id,
+            schema_version="agent_failure_event.v2",
+            event_id=deterministic_event_id("race-fail", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-race-fail-{wf}",
+        ),
+        "payload": {
+            "role": "supply",
+            "agent_id": "agent-supply-01",
+            "failure_kind": "timeout",
+            "attempts": 1,
+            "detail": "race probe",
+            "detected_at": "2026-08-21T10:00:00Z",
+        },
+    }
+
+    # (a) completion lands between the handler's pre-read and the commit.
+    prepared, release = threading.Event(), threading.Event()
+    inner = make_failure_handler(db)
+    results = {}
+
+    def raced(msg, writes):
+        inner(msg, writes)
+        prepared.set()
+        assert release.wait(timeout=30)
+
+    def worker():
+        results["fail"] = process_message(
+            db, failure, raced, consumer_identity="forge-orchestrator"
+        )
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    assert prepared.wait(timeout=30)
+    assignment = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            work_package_id=wp_id,
+            schema_version="work_package_assignment.v2",
+            event_id=deterministic_event_id("race-assign", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-race-assign-{wf}",
+        ),
+        "payload": {
+            "role": "supply",
+            "objective": "Source the actuator.",
+            "assigned_agent_id": "agent-supply-01",
+            "assignment_seq": 1,
+            "inputs": nmc_inputs,
+        },
+    }
+    assert process_message(
+        db,
+        assignment,
+        make_supply(
+            db,
+            stub_json(
+                {
+                    "part_number": "HYD-ACT-4402",
+                    "part_approved": True,
+                    "shipment_status": "delayed",
+                    "eta_days": 21,
+                }
+            ),
+        ),
+        consumer_identity="forge-supply",
+    )
+    wp_ref = workflow_ref.collection("work_packages").document(wp_id)
+    assert wp_ref.get().to_dict()["status"] == "COMPLETED"
+    trail_len = len(state.reconstruct_audit_trail(db, wf))
+    release.set()
+    thread.join(timeout=30)
+    assert results["fail"] is True
+    assert workflow_ref.get().to_dict()["status"] == "INTAKE"  # never blocked
+    assert wp_ref.get().to_dict()["status"] == "COMPLETED"
+    assert len(state.reconstruct_audit_trail(db, wf)) == trail_len
+    assert registry.instance_ref(db, "agent-supply-01").get().to_dict()["state"] != "FAILED"
+
+    # (b) a genuinely still-assigned failure on a fresh workflow blocks.
+    wf2 = unique_wf()
+    trace2 = deterministic_trace_id(wf2)
+    state.create_workflow(
+        db, workflow_id=wf2, equipment_id="GX12-08", trace_id=trace2, logical_time=0
+    )
+    wp2 = f"wp-supply-{wf2.removeprefix('wf-')}"
+
+    def _claim2(txn):
+        registry.claim_work_package(
+            txn,
+            db,
+            workflow_id=wf2,
+            work_package_id=wp2,
+            instance_id="agent-supply-01",
+            role="supply",
+            objective="Source the actuator.",
+            inputs=nmc_inputs,
+        )
+
+    layout.run_in_transaction(db, _claim2)
+    failure2 = {
+        "envelope": build_envelope(
+            workflow_id=wf2,
+            work_package_id=wp2,
+            schema_version="agent_failure_event.v2",
+            event_id=deterministic_event_id("race-fail", wf2),
+            trace_id=trace2,
+            idempotency_key=f"idem-race-fail-{wf2}",
+        ),
+        "payload": dict(failure["payload"]),
+    }
+    assert process_message(
+        db, failure2, make_failure_handler(db), consumer_identity="forge-orchestrator"
+    )
+    assert (
+        db.collection("workflows").document(wf2).get().to_dict()["status"]
+        == "BLOCKED_AGENT_FAILURE"
+    )
+    wp2_doc = (
+        db.collection("workflows")
+        .document(wf2)
+        .collection("work_packages")
+        .document(wp2)
+        .get()
+        .to_dict()
+    )
+    assert wp2_doc["status"] == "FAILED"
+    assert registry.instance_ref(db, "agent-supply-01").get().to_dict()["state"] == "FAILED"

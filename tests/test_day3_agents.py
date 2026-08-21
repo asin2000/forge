@@ -208,7 +208,7 @@ def test_specialists_produce_contract_valid_outputs():
         == [
             "maintenance_action_plan.v2",
             "nmc_event.v2",
-            "sourcing_report.v2",
+            "sourcing_report.v3",
             "work_package_assignment.v2",
             "work_package_assignment.v2",
         ]
@@ -217,7 +217,7 @@ def test_specialists_produce_contract_valid_outputs():
     plan = next(
         m for m in produced if m["envelope"]["schema_version"] == "maintenance_action_plan.v2"
     )
-    report = next(m for m in produced if m["envelope"]["schema_version"] == "sourcing_report.v2")
+    report = next(m for m in produced if m["envelope"]["schema_version"] == "sourcing_report.v3")
     validate_message(plan)
     validate_message(report)
     assert report["payload"]["eta_days"] == 21
@@ -274,7 +274,7 @@ def test_agent_retries_then_emits_failure_event():
     ("role", "schema", "payload", "extra"),
     [
         ("maintenance", "maintenance_action_plan.v2", PLAN_PAYLOAD, "release_equipment"),
-        ("supply", "sourcing_report.v2", REPORT_PAYLOAD, "substitution_approved"),
+        ("supply", "sourcing_report.v3", REPORT_PAYLOAD, "substitution_approved"),
     ],
 )
 def test_specialist_boundaries_enforced_by_contract(role, schema, payload, extra):

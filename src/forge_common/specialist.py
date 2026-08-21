@@ -56,23 +56,24 @@ def make_work_package_handler(
             workflow_id=envelope["workflow_id"],
             work_package_id=envelope["work_package_id"],
             trace_id=envelope["trace_id"],
+            source_event_id=envelope["event_id"],
             payload_check=(
                 payload_check_factory(payload) if payload_check_factory is not None else None
             ),
         )
-        writes.outbox_messages.append(result)
         failed = result["envelope"]["schema_version"] == "agent_failure_event.v2"
-        # Package lifecycle, atomic with the output (ORC-4): a successful
-        # specialist can never be falsely timed out afterwards; a source-side
-        # failure is parked for repair rather than re-flagged by the monitor.
-        writes.work_package_status_updates.append(
-            {
-                "work_package_id": envelope["work_package_id"],
-                "expected_owner": agent_id,
-                "status": "FAILED_PENDING_REPAIR" if failed else "COMPLETED",
-            }
-        )
-        writes.audit_events.append(
+        # EVERYTHING package-scoped — domain output, audit, status — rides
+        # ONE transactional ownership guard (owned_effects): if this worker
+        # was reassigned away before commit, none of it lands, so a stale
+        # primary can never publish a competing result (entrant blocker 1).
+        writes.owned_effects = {
+            "work_package_id": envelope["work_package_id"],
+            "expected_owner": agent_id,
+            "status": "FAILED_PENDING_REPAIR" if failed else "COMPLETED",
+            "outbox_messages": [result],
+            "audit_events": [],
+        }
+        writes.owned_effects["audit_events"].append(
             build_audit_event(
                 workflow_id=envelope["workflow_id"],
                 trace_id=envelope["trace_id"],

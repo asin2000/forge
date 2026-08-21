@@ -60,20 +60,33 @@ def procedures() -> dict[str, dict[str, Any]]:
     return {r["rule_ref"]: r for r in doc["rules"]}
 
 
-def plan_violations(plan_payload: dict[str, Any]) -> list[tuple[str, str]]:
+def _part_ok(part_number: str, discrepancy_code: str | None) -> bool:
+    """Discrepancy-specific when context is known; global membership only as
+    the fallback when no workflow discrepancy is available."""
+    if discrepancy_code:
+        return is_part_approved_for(part_number, discrepancy_code)
+    return is_part_approved(part_number)
+
+
+def plan_violations(
+    plan_payload: dict[str, Any], *, discrepancy_code: str | None = None
+) -> list[tuple[str, str]]:
     """Data-backed safety check of a maintenance plan (AGT-4).
 
-    Returns (rule_ref, reason) pairs; empty means compliant.
+    Part approval is DISCREPANCY-SPECIFIC when the workflow's discrepancy is
+    known. Returns (rule_ref, reason) pairs; empty means compliant.
     """
     violations: list[tuple[str, str]] = []
     max_hours = procedures()["SP-HRS-002"].get("max_est_hours", 24)
     for task in plan_payload.get("tasks", []):
         for part in task.get("parts_required", []):
-            if not is_part_approved(part["part_number"]):
+            if not _part_ok(part["part_number"], discrepancy_code):
                 violations.append(
                     (
                         "SP-PART-001",
-                        f"part {part['part_number']} is not in the approved-parts registry",
+                        f"part {part['part_number']} is not approved"
+                        + (f" for {discrepancy_code}" if discrepancy_code else "")
+                        + " in the approved-parts registry",
                     )
                 )
         if task.get("est_hours", 0) > max_hours:
@@ -101,23 +114,32 @@ def sourcing_facts(part_number: str) -> dict[str, Any] | None:
     return {"shipment_status": entry["shipment_status"], "eta_days": entry["eta_days"]}
 
 
-def sourcing_violations(report_payload: dict[str, Any]) -> list[tuple[str, str]]:
-    """Data-backed safety check of a sourcing report (AGT-4)."""
+def sourcing_violations(
+    report_payload: dict[str, Any], *, discrepancy_code: str | None = None
+) -> list[tuple[str, str]]:
+    """Data-backed safety check of a sourcing report (AGT-4): approval must
+    hold FOR THIS DISCREPANCY (sourcing_report.v3 semantics)."""
     violations: list[tuple[str, str]] = []
-    if report_payload.get("part_approved") and not is_part_approved(
-        report_payload.get("part_number", "")
+    if report_payload.get("part_approved") and not _part_ok(
+        report_payload.get("part_number", ""), discrepancy_code
     ):
         violations.append(
             (
                 "SP-PART-001",
-                f"sourcing report claims approval for unregistered part "
-                f"{report_payload.get('part_number')}",
+                f"sourcing report claims approval for {report_payload.get('part_number')}"
+                + (
+                    f", not approved for {discrepancy_code}"
+                    if discrepancy_code
+                    else " (unregistered)"
+                ),
             )
         )
     return violations
 
 
-def roster_violations(roster_payload: dict[str, Any]) -> list[tuple[str, str]]:
+def roster_violations(
+    roster_payload: dict[str, Any], *, discrepancy_code: str | None = None
+) -> list[tuple[str, str]]:
     """Data-backed safety check of a roster (AGT-4 / SP-QUAL-001)."""
     violations: list[tuple[str, str]] = []
     for item in roster_payload.get("assignments", []):

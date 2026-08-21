@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:sourcing_report.v3",
+  "title": "Parts sourcing report",
+  "description": "Supply Agent domain output: availability and shipment status of an approved part. Approval is DISCREPANCY-SPECIFIC: part_approved refers to the workflow's discrepancy, per the approved-parts registry's applicable_discrepancies. Supply cannot approve substitutions or purchases (AGT-2); shipment_status and eta_days are reported from the synthetic supply-chain data, never invented. Traceability: AGT-2. All data synthetic (SUB-5). (v3: description/semantics reconciled to the discrepancy-specific rule; payload shape unchanged from v2.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v2.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "sourcing_report.v3"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "part_number",
+        "part_approved",
+        "shipment_status",
+        "eta_days"
+      ],
+      "properties": {
+        "part_number": {
+          "type": "string",
+          "pattern": "^[A-Z0-9][A-Z0-9-]{3,31}$"
+        },
+        "part_approved": {
+          "type": "boolean",
+          "description": "True iff part_number is approved FOR THIS WORKFLOW'S DISCREPANCY (applicable_discrepancies in the approved-parts registry) \u2014 global registry membership is not sufficient."
+        },
+        "shipment_status": {
+          "enum": [
+            "not_ordered",
+            "ordered",
+            "in_transit",
+            "delayed",
+            "delivered"
+          ]
+        },
+        "eta_days": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 365,
+          "description": "Logical days until arrival from report time."
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}
