@@ -1,0 +1,18 @@
+# Synthetic technician qualification records (AGT-3: assignment strictly by
+# task-code qualification; no waivers).
+technicians:
+  - technician_id: T-1001
+    qualifications:
+      - qualification_id: Q-HYD-101
+        task_codes: [TC-101, TC-102]
+        shift: day
+  - technician_id: T-1002
+    qualifications:
+      - qualification_id: Q-HYD-101
+        task_codes: [TC-101]
+        shift: swing
+  - technician_id: T-2001
+    qualifications:
+      - qualification_id: Q-ELE-201
+        task_codes: [TC-201]
+        shift: day

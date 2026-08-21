@@ -87,6 +87,10 @@ class TxnWrites:
     #: registry.claim_work_package minus db/workflow_id; applied in the
     #: committing transaction, colliding if the package already has an owner.
     work_package_claims: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    #: atomic ownership transfers to a held reserve (ORC-3) — kwargs for
+    #: registry.check_reassignment/apply_reassignment minus db/workflow_id.
+    #: A transfer already applied (double-fired failure event) is skipped.
+    reassignments: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
 def _audit_rejection(
@@ -270,14 +274,22 @@ def process_message(
                 or current.get("status") == "done"
             ):
                 return False  # claim lost to a takeover — the holder will commit
-            # All claim-eligibility READS precede any write (REG-2; real
-            # Firestore requires reads before writes in a transaction).
+            # All claim-eligibility and reassignment READS precede any
+            # write (REG-2/ORC-3; real Firestore requires reads first).
             for claim in writes.work_package_claims:
                 registry.check_claim_eligibility(txn, db, **claim)
+            plans = [
+                registry.check_reassignment(txn, db, workflow_id=workflow_id, **r)
+                for r in writes.reassignments
+            ]
             if writes.transition is not None:
                 state.apply_transition(txn, db, workflow_id=workflow_id, **writes.transition)
             for claim in writes.work_package_claims:
                 registry.claim_work_package(txn, db, workflow_id=workflow_id, **claim)
+            for reassignment, plan in zip(writes.reassignments, plans, strict=True):
+                registry.apply_reassignment(
+                    txn, db, workflow_id=workflow_id, **reassignment, plan=plan
+                )
             txn.set(
                 marker_ref,
                 {**current, "status": "done", "processed_observed_at": now_iso()},

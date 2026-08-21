@@ -22,15 +22,19 @@ requirements:
     verification_method: inspection
   ORC-3:
     implemented_by:
-      - pending
+      - src/forge_common/registry.py
+      - services/orchestrator/handlers.py
     verified_by:
-      - pending
+      - tests/test_day4_repair_loop.py
+      - tests/emulator/test_emulator_integration.py
     verification_method: demonstration
   ORC-4:
     implemented_by:
-      - pending
+      - services/orchestrator/monitor.py
+      - services/orchestrator/handlers.py
     verified_by:
-      - pending
+      - tests/test_day4_repair_loop.py
+      - tests/emulator/test_emulator_integration.py
     verification_method: test
   ORC-5:
     implemented_by:
@@ -55,24 +59,29 @@ requirements:
     implemented_by:
       - services/supply/handlers.py
       - src/forge_common/specialist.py
+      - src/forge_common/synthetic_data.py
+      - data/approved_parts.yaml
     verified_by:
       - tests/test_day3_agents.py
+      - tests/test_day4_repair_loop.py
     verification_method: test
   AGT-3:
     implemented_by:
       - contracts/roster_assignment.v2.schema.json
-      - pending
+      - services/workforce/handlers.py
+      - data/qualifications.yaml
     verified_by:
       - tests/test_contracts.py
-      - pending
+      - tests/test_day4_repair_loop.py
     verification_method: test
   AGT-4:
     implemented_by:
       - contracts/validation_verdict.v2.schema.json
-      - pending
+      - services/safety/handlers.py
+      - data/procedures.yaml
     verified_by:
       - tests/test_contracts.py
-      - pending
+      - tests/test_day4_repair_loop.py
     verification_method: test
   AGT-5:
     implemented_by:

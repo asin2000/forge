@@ -433,3 +433,96 @@ def test_day3_exit_assign_and_produce_real_client(db):
     assert schemas.count("sourcing_report.v2") == 1
     for message in produced:
         validate_message(message)
+
+
+def test_reg2_race_rejected_on_real_client(db):
+    """Rider 1: the negative REG-2 race on REAL Firestore — a definition
+    retired between discovery and commit is refused, audited, and the
+    delivery stays reprocessable."""
+    from forge_common import registry
+    from forge_common.bus import TxnWrites
+    from forge_common.registry import IneligibleAssignment
+
+    registry.load_registry(db)
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    message = build_due_event(workflow_id=wf, trace_id=trace, due_at=21)
+
+    def stale_plan(msg, writes: TxnWrites):
+        ref = registry.definition_ref(db, "forge-maintenance")
+        ref.set({**ref.get().to_dict(), "lifecycle_status": "RETIRED"})
+        writes.work_package_claims.append(
+            {
+                "work_package_id": f"wp-maintenance-{wf.removeprefix('wf-')}",
+                "instance_id": "agent-maintenance-01",
+                "role": "maintenance",
+            }
+        )
+
+    with pytest.raises(IneligibleAssignment):
+        process_message(db, message, stale_plan, consumer_identity="forge-orchestrator")
+    workflow = db.collection("workflows").document(wf)
+    assert list(workflow.collection("work_packages").stream()) == []
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, wf)]
+    assert "ASSIGNMENT_INELIGIBLE" in reasons
+    ref = registry.definition_ref(db, "forge-maintenance")
+    ref.set({**ref.get().to_dict(), "lifecycle_status": "APPROVED"})
+    assert process_message(db, message, lambda m, w: None, consumer_identity="forge-orchestrator")
+
+
+def test_day4_exit_repair_loop_real_client(db):
+    """Day 4 exit criterion: injected Workforce failure detected by the
+    monitor and reassigned to the reserve exactly once — on real Firestore."""
+    from services.orchestrator.handlers import make_failure_handler
+    from services.orchestrator.monitor import run_monitoring_cycle
+
+    from forge_common import layout, registry
+
+    registry.load_registry(db)
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    wp_id = f"wp-workforce-{wf.removeprefix('wf-')}"
+
+    def _claim(txn):
+        registry.claim_work_package(
+            txn,
+            db,
+            workflow_id=wf,
+            work_package_id=wp_id,
+            instance_id="agent-workforce-01",
+            role="workforce",
+            objective="Staff the plan.",
+        )
+
+    layout.run_in_transaction(db, _claim)
+    wp_ref = db.collection("workflows").document(wf).collection("work_packages").document(wp_id)
+    wp_ref.set({**wp_ref.get().to_dict(), "assigned_observed_at": "2026-08-21T09:00:00.000000Z"})
+
+    now = "2026-08-21T09:10:00.000000Z"
+    first = run_monitoring_cycle(db, trace_id_for=lambda w: trace, now=now)
+    second = run_monitoring_cycle(db, trace_id_for=lambda w: trace, now=now)
+    assert wp_id in first and second == []
+
+    outbox = db.collection("workflows").document(wf).collection("outbox")
+    timeout_event = next(
+        d.to_dict()["message"]
+        for d in outbox.stream()
+        if d.to_dict()["message"]["envelope"]["schema_version"] == "agent_failure_event.v2"
+    )
+    handler = make_failure_handler(db)
+    assert process_message(db, timeout_event, handler, consumer_identity="forge-orchestrator")
+    assert (
+        process_message(db, timeout_event, handler, consumer_identity="forge-orchestrator") is False
+    )
+    wp = wp_ref.get().to_dict()
+    assert wp["owner_instance_id"] == "agent-workforce-02"
+    assert wp["reassigned_from"] == "agent-workforce-01"
+    assert wp["assignment_seq"] == 2
+    kinds = [e["payload"]["event_kind"] for e in state.reconstruct_audit_trail(db, wf)]
+    assert kinds.count("reassignment") == 1

@@ -157,6 +157,7 @@ def claim_work_package(
     work_package_id: str,
     instance_id: str,
     role: str,
+    objective: str = "",
 ) -> None:
     """Create the exclusive-ownership record for a work package (ORC-1).
 
@@ -171,7 +172,9 @@ def claim_work_package(
             "work_package_id": work_package_id,
             "owner_instance_id": instance_id,
             "role": role,
+            "objective": objective,
             "status": "ASSIGNED",
+            "assignment_seq": 1,
             "assigned_observed_at": now_iso(),
         },
     )
@@ -180,3 +183,79 @@ def claim_work_package(
         {"state": "ACTIVE", "state_changed_observed_at": now_iso()},
         merge=True,
     )
+
+
+def find_reserve_instance(db: Any, role: str) -> dict[str, Any] | None:
+    """The held RESERVE instance for a role, if any (ORC-3)."""
+    for snapshot in db.collection("agent_instances").stream():
+        inst = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+        if inst.get("role") == role and inst.get("state") == "RESERVE":
+            return inst
+    return None
+
+
+def check_reassignment(
+    txn: Any,
+    db: Any,
+    *,
+    workflow_id: str,
+    work_package_id: str,
+    failed_instance_id: str,
+    reserve_instance_id: str,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """READS ONLY: decide whether a reassignment may apply (ORC-3, exactly
+    once). Returns a plan; ``skip=True`` when ownership already transferred
+    (a double-fired failure event applies nothing). Raises
+    IneligibleAssignment when the reserve is not actually in RESERVE."""
+    wp = layout.txn_get_dict(txn, layout.work_package_ref(db, workflow_id, work_package_id))
+    if not wp:
+        raise IneligibleAssignment(f"work package {work_package_id} does not exist")
+    if wp.get("owner_instance_id") != failed_instance_id:
+        return {"skip": True, "work_package": wp}
+    reserve = layout.txn_get_dict(txn, instance_ref(db, reserve_instance_id))
+    if not reserve or reserve.get("state") != "RESERVE":
+        raise IneligibleAssignment(
+            f"instance {reserve_instance_id} is not a held reserve "
+            f"(state={reserve.get('state') if reserve else 'missing'}) (ORC-3)"
+        )
+    return {"skip": False, "work_package": wp}
+
+
+def apply_reassignment(
+    txn: Any,
+    db: Any,
+    *,
+    workflow_id: str,
+    work_package_id: str,
+    failed_instance_id: str,
+    reserve_instance_id: str,
+    plan: dict[str, Any],
+) -> bool:
+    """WRITES ONLY (after :func:`check_reassignment` in the same txn):
+    atomically transfer ownership to the reserve, mark the failed instance
+    FAILED and the reserve ACTIVE (ORC-3). Returns False on skip."""
+    if plan.get("skip"):
+        return False
+    wp = plan["work_package"]
+    txn.set(
+        layout.work_package_ref(db, workflow_id, work_package_id),
+        {
+            **wp,
+            "owner_instance_id": reserve_instance_id,
+            "reassigned_from": failed_instance_id,
+            "assignment_seq": int(wp.get("assignment_seq", 1)) + 1,
+            "reassigned_observed_at": now_iso(),
+        },
+    )
+    txn.set(
+        instance_ref(db, failed_instance_id),
+        {"state": "FAILED", "state_changed_observed_at": now_iso()},
+        merge=True,
+    )
+    txn.set(
+        instance_ref(db, reserve_instance_id),
+        {"state": "ACTIVE", "state_changed_observed_at": now_iso()},
+        merge=True,
+    )
+    return True
