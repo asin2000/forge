@@ -69,11 +69,18 @@ class FakeTransaction:
         self._store = store
         self._writes: list[tuple[str, tuple[str, ...], dict[str, Any]]] = []
 
-    def get(self, ref: FakeDocumentRef) -> FakeSnapshot:
-        for _op, path, data in reversed(self._writes):
-            if path == ref.path:
-                return FakeSnapshot(data)
-        return ref.get()
+    def get(self, ref: FakeDocumentRef) -> Iterator[FakeSnapshot]:
+        """Yield a generator, matching the REAL client's Transaction.get —
+        production code must normalize via layout.txn_get_dict."""
+
+        def _one() -> Iterator[FakeSnapshot]:
+            for _op, path, data in reversed(self._writes):
+                if path == ref.path:
+                    yield FakeSnapshot(data)
+                    return
+            yield ref.get()
+
+        return _one()
 
     def set(self, ref: FakeDocumentRef, data: dict[str, Any]) -> None:
         self._writes.append(("set", ref.path, copy.deepcopy(data)))

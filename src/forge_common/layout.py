@@ -50,8 +50,31 @@ def validate_state_doc(doc: dict[str, Any]) -> dict[str, Any]:
     return doc
 
 
+def txn_get_dict(txn: Any, ref: Any) -> dict[str, Any] | None:
+    """Read one document inside a transaction, normalized to a dict.
+
+    The real google-cloud-firestore ``Transaction.get(ref)`` returns a
+    GENERATOR of snapshots, not a snapshot — every transactional read goes
+    through this helper so both the real client and the test double resolve
+    to ``dict | None``. (Found by adversarial review; the fake's get now
+    also yields a generator so tests exercise the real shape.)
+    """
+    result = txn.get(ref)
+    if not hasattr(result, "to_dict"):
+        result = next(iter(result), None)
+    if result is None:
+        return None
+    data = result.to_dict()
+    return data if data else None
+
+
 def workflow_ref(db: Any, workflow_id: str) -> Any:
     return db.collection("workflows").document(workflow_id)
+
+
+def consumed_approval_ref(db: Any, workflow_id: str, approval_id: str) -> Any:
+    """Marker consumed atomically with a gated transition (HUM-1 replay guard)."""
+    return workflow_ref(db, workflow_id).collection("approvals_consumed").document(approval_id)
 
 
 def audit_ref(db: Any, workflow_id: str, event_id: str) -> Any:

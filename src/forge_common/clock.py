@@ -35,8 +35,7 @@ def advance_clock(db: Any, days: int) -> int:
         raise ValueError("clock only advances")
 
     def _advance(txn: Any) -> int:
-        snapshot = txn.get(layout.clock_ref(db))
-        doc = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+        doc = layout.txn_get_dict(txn, layout.clock_ref(db))
         new_time = (int(doc["logical_time"]) if doc else 0) + days
         txn.set(layout.clock_ref(db), {"logical_time": new_time})
         return new_time
@@ -47,15 +46,23 @@ def advance_clock(db: Any, days: int) -> int:
 def build_due_event(
     *, workflow_id: str, trace_id: str, due_at: int, purpose: str = "part_eta_reached"
 ) -> dict[str, Any]:
-    """Deterministic due_event.v2 for (workflow_id, due_at) (ORC-5)."""
-    event_id = deterministic_event_id("due", workflow_id, str(due_at))
+    """Deterministic due_event.v2 for (workflow_id, due_at, purpose) (ORC-5).
+
+    Identity includes ``purpose`` so a same-day ``review_due`` is a distinct
+    event from ``part_eta_reached``. Known scope limit (documented, demo
+    spine never hits it): a workflow that re-arms a previously-fired absolute
+    due day collides with the retained outbox record and will not re-fire; a
+    suspension-epoch counter would require a workflow_state schema bump and
+    is deliberately out of v1.2 scope (§10).
+    """
+    event_id = deterministic_event_id("due", workflow_id, str(due_at), purpose)
     message = {
         "envelope": build_envelope(
             workflow_id=workflow_id,
             schema_version="due_event.v2",
             event_id=event_id,
             trace_id=trace_id,
-            idempotency_key=f"idem-due-{workflow_id}-{due_at:04d}",
+            idempotency_key=f"idem-due-{workflow_id}-{due_at:04d}-{purpose}",
         ),
         "payload": {"due_at_logical": due_at, "purpose": purpose},
     }
@@ -83,8 +90,7 @@ def emit_due_events(db: Any, *, logical_time: int, trace_id: str) -> list[str]:
         def _enqueue(
             txn: Any, wid: str = workflow_id, eid: str = event_id, msg: dict[str, Any] = message
         ) -> bool:
-            existing = txn.get(layout.outbox_ref(db, wid, eid))
-            doc = existing.to_dict() if hasattr(existing, "to_dict") else existing
+            doc = layout.txn_get_dict(txn, layout.outbox_ref(db, wid, eid))
             if doc:
                 return False
             txn.create(

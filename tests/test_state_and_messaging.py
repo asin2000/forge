@@ -30,10 +30,10 @@ def make_workflow(db, logical_time=0):
     )
 
 
-def approval(action_type, decision="approved"):
+def approval(action_type, decision="approved", approval_id=None):
     return {
         "payload": {
-            "approval_id": "apr-sched-0001",
+            "approval_id": approval_id or f"apr-{action_type.replace('_', '-')}-0001",
             "action_type": action_type,
             "decision": decision,
             "approver_identity": "approver@example.test",
@@ -308,3 +308,225 @@ def test_audit_trail_reconstructs_across_time_skip():
         assert event["payload"]["observed_at"].endswith("Z")
         assert isinstance(event["payload"]["effective_at"], int)
         assert event["envelope"]["data_origin"] == "SYNTHETIC"
+
+
+def suspend(db, due_at=21):
+    advance_to(db, ["PLANNING", "VALIDATING", "AWAITING_SCHEDULE_APPROVAL"])
+    return state.transition_workflow(
+        db,
+        workflow_id=WF,
+        target="SUSPENDED_AWAITING_PART",
+        agent_identity="forge-orchestrator",
+        trace_id=TRACE,
+        reason_code="SCHEDULE_OVERRIDE",
+        approval=approval("schedule_override"),
+        due_at=due_at,
+    )
+
+
+def test_post_skip_events_carry_advanced_effective_at():
+    """AUD-3/ORC-5: after the 21-day skip, resume events stamp day 21."""
+    db = FakeFirestore()
+    make_workflow(db)
+    suspend(db, due_at=21)
+    assert advance_clock(db, 21) == 21
+    emit_due_events(db, logical_time=21, trace_id=TRACE)
+    advance_to(db, ["ASSEMBLY_RESUMED", "AWAITING_RELEASE_APPROVAL"])
+    doc = state.transition_workflow(
+        db,
+        workflow_id=WF,
+        target="RELEASED",
+        agent_identity="forge-orchestrator",
+        trace_id=TRACE,
+        reason_code="EQUIPMENT_RELEASE",
+        approval=approval("equipment_release"),
+    )
+    assert doc["logical_time"] == 21
+    trail = state.reconstruct_audit_trail(db, WF)
+    by_state = {e["payload"]["state_after"]: e["payload"]["effective_at"] for e in trail}
+    assert by_state["SUSPENDED_AWAITING_PART"] == 0
+    assert by_state["ASSEMBLY_RESUMED"] == 21
+    assert by_state["RELEASED"] == 21
+    assert trail[-1]["payload"]["state_after"] == "RELEASED"
+
+
+def test_approval_evidence_reconstructs_from_firestore(tmp_path=None):
+    """HUM-1: approver_identity, action, decision recoverable from the trail."""
+    import json as _json
+
+    db = FakeFirestore()
+    make_workflow(db)
+    suspend(db, due_at=21)
+    trail = state.reconstruct_audit_trail(db, WF)
+    evt = trail[-1]
+    assert evt["payload"]["event_kind"] == "approval"
+    evidence = _json.loads(evt["payload"]["detail"])["approval"]
+    assert evidence["approver_identity"] == "approver@example.test"
+    assert evidence["action_type"] == "schedule_override"
+    assert evidence["decision"] == "approved"
+    assert evidence["approval_id"].startswith("apr-")
+    assert evidence["decided_at"]
+
+
+def test_replayed_approval_cannot_authorize_second_transition():
+    """HUM-1: an approval is consumed once; replay raises GateBlocked."""
+    db = FakeFirestore()
+    make_workflow(db)
+    suspend(db, due_at=21)
+    advance_to(db, ["ASSEMBLY_RESUMED", "BLOCKED_AGENT_FAILURE"])
+    advance_to(db, ["PLANNING", "VALIDATING", "AWAITING_SCHEDULE_APPROVAL"])
+    with pytest.raises(state.GateBlocked, match="already consumed"):
+        state.transition_workflow(
+            db,
+            workflow_id=WF,
+            target="SUSPENDED_AWAITING_PART",
+            agent_identity="forge-orchestrator",
+            trace_id=TRACE,
+            reason_code="SCHEDULE_OVERRIDE",
+            approval=approval("schedule_override"),  # same approval_id as before
+            due_at=30,
+        )
+    doc = state.transition_workflow(
+        db,
+        workflow_id=WF,
+        target="SUSPENDED_AWAITING_PART",
+        agent_identity="forge-orchestrator",
+        trace_id=TRACE,
+        reason_code="SCHEDULE_OVERRIDE",
+        approval=approval("schedule_override", approval_id="apr-schedule-override-0002"),
+        due_at=30,
+    )
+    assert doc["due_at"] == 30
+
+
+def test_suspension_requires_due_at_and_rejects_stray_due_at():
+    """ORC-5: no unscheduled suspensions; due_at only valid when suspending."""
+    db = FakeFirestore()
+    make_workflow(db)
+    advance_to(db, ["PLANNING", "VALIDATING", "AWAITING_SCHEDULE_APPROVAL"])
+    with pytest.raises(state.InvalidTransition, match="due_at"):
+        state.transition_workflow(
+            db,
+            workflow_id=WF,
+            target="SUSPENDED_AWAITING_PART",
+            agent_identity="forge-orchestrator",
+            trace_id=TRACE,
+            reason_code="SCHEDULE_OVERRIDE",
+            approval=approval("schedule_override"),
+        )
+    with pytest.raises(state.InvalidTransition, match="due_at"):
+        state.transition_workflow(
+            db,
+            workflow_id=WF,
+            target="PLANNING",
+            agent_identity="forge-orchestrator",
+            trace_id=TRACE,
+            reason_code="STATE_ADVANCE",
+            due_at=5,
+        )
+
+
+def test_rejected_release_has_rework_exit():
+    """HUM-1 reject path: AWAITING_RELEASE_APPROVAL -> ASSEMBLY_RESUMED."""
+    db = FakeFirestore()
+    make_workflow(db)
+    suspend(db, due_at=21)
+    advance_to(db, ["ASSEMBLY_RESUMED", "AWAITING_RELEASE_APPROVAL"])
+    doc = state.transition_workflow(
+        db,
+        workflow_id=WF,
+        target="ASSEMBLY_RESUMED",
+        agent_identity="forge-orchestrator",
+        trace_id=TRACE,
+        reason_code="RELEASE_REJECTED_REWORK",
+    )
+    assert doc["status"] == "ASSEMBLY_RESUMED"
+
+
+def test_fanout_consumers_each_process_once():
+    """ICD-5: inbox markers are consumer-scoped — no cross-consumer lockout."""
+    db = FakeFirestore()
+    make_workflow(db)
+    message = build_due_event(workflow_id=WF, trace_id=TRACE, due_at=21)
+    ran = []
+    handler = lambda m, w: ran.append(1)  # noqa: E731
+    assert process_message(db, message, handler, consumer_identity="forge-orchestrator")
+    assert process_message(db, message, handler, consumer_identity="forge-safety")
+    assert process_message(db, message, handler, consumer_identity="forge-orchestrator") is False
+    assert len(ran) == 2
+
+
+def test_bus_transition_path_enforces_gates():
+    """SPINE-3 regression: handlers cannot bypass the table or HUM-1 gates."""
+    db = FakeFirestore()
+    make_workflow(db)
+    message = build_due_event(workflow_id=WF, trace_id=TRACE, due_at=21)
+
+    def illegal(msg, writes: TxnWrites):
+        writes.transition = {
+            "target": "RELEASED",
+            "agent_identity": "forge-orchestrator",
+            "trace_id": TRACE,
+            "reason_code": "SNEAKY_RELEASE",
+        }
+
+    with pytest.raises(state.InvalidTransition):
+        process_message(db, message, illegal, consumer_identity="forge-orchestrator")
+    stored = db.collection("workflows").document(WF).get().to_dict()
+    assert stored["status"] == "INTAKE"
+
+    def legal(msg, writes: TxnWrites):
+        writes.transition = {
+            "target": "PLANNING",
+            "agent_identity": "forge-orchestrator",
+            "trace_id": TRACE,
+            "reason_code": "DECOMPOSED",
+        }
+
+    assert process_message(db, message, legal, consumer_identity="forge-orchestrator")
+    assert db.collection("workflows").document(WF).get().to_dict()["status"] == "PLANNING"
+    trail = state.reconstruct_audit_trail(db, WF)
+    assert trail[-1]["payload"]["state_after"] == "PLANNING"
+
+
+def test_untrusted_rejection_is_audited():
+    """ICD-2/DAT-2: rejection writes a blocked_action audit event."""
+    db = FakeFirestore()
+    make_workflow(db)
+    message = build_due_event(workflow_id=WF, trace_id=TRACE, due_at=21)
+    message["envelope"]["trust_state"] = "UNSCREENED"
+    with pytest.raises(UntrustedMessageRejected):
+        process_message(db, message, lambda m, w: None, consumer_identity="forge-orchestrator")
+    trail = state.reconstruct_audit_trail(db, WF)
+    blocked = [e for e in trail if e["payload"]["event_kind"] == "blocked_action"]
+    assert len(blocked) == 1
+    assert blocked[0]["payload"]["reason_code"] == "UNTRUSTED_MESSAGE_REJECTED"
+
+
+def test_drain_outbox_publishes_in_enqueue_order():
+    """ICD-5: publish order is enqueue order, not document-ID order."""
+    db = FakeFirestore()
+    make_workflow(db)
+    first = build_due_event(workflow_id=WF, trace_id=TRACE, due_at=7)
+    second = build_due_event(workflow_id=WF, trace_id=TRACE, due_at=21)
+    state.transition_workflow(
+        db,
+        workflow_id=WF,
+        target="PLANNING",
+        agent_identity="forge-orchestrator",
+        trace_id=TRACE,
+        reason_code="DECOMPOSED",
+        outbox_messages=[first],
+    )
+    state.transition_workflow(
+        db,
+        workflow_id=WF,
+        target="VALIDATING",
+        agent_identity="forge-orchestrator",
+        trace_id=TRACE,
+        reason_code="STATE_ADVANCE",
+        outbox_messages=[second],
+    )
+    order = []
+    drain_outbox(db, WF, lambda msg, key: order.append(msg["payload"]["due_at_logical"]))
+    assert order == [7, 21]
