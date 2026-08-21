@@ -435,6 +435,16 @@ def test_day3_exit_assign_and_produce_real_client(db):
         validate_message(message)
 
 
+def reset_workforce_instances(db):
+    """Emulator DB persists across tests (as production deliberately does
+    across redeploys): pin the workforce instances back to their seeded
+    states so repair-loop tests are order-independent."""
+    from forge_common import registry
+
+    registry.instance_ref(db, "agent-workforce-01").set({"state": "IDLE"}, merge=True)
+    registry.instance_ref(db, "agent-workforce-02").set({"state": "RESERVE"}, merge=True)
+
+
 def test_reg2_race_rejected_on_real_client(db):
     """Rider 1: the negative REG-2 race on REAL Firestore — a definition
     retired between discovery and commit is refused, audited, and the
@@ -482,6 +492,7 @@ def test_day4_exit_repair_loop_real_client(db):
     from forge_common import layout, registry
 
     registry.load_registry(db)
+    reset_workforce_instances(db)
     wf = unique_wf()
     trace = deterministic_trace_id(wf)
     state.create_workflow(
@@ -544,6 +555,7 @@ def test_day4_closeout_full_flow_real_client(db):
     from forge_common import registry
 
     registry.load_registry(db)
+    reset_workforce_instances(db)
     wf = unique_wf()
     trace = deterministic_trace_id(wf)
     state.create_workflow(
