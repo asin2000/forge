@@ -129,7 +129,10 @@ def screen_document(
         )
 
         def _write(txn: Any) -> None:
+            # ALL reads before ANY write (real Firestore transaction rule).
             current = layout.txn_get_dict(txn, quarantine_ref(db, doc_id))
+            audit_ref = layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"])
+            audit_exists = layout.txn_get_dict(txn, audit_ref)
             if not current or current["status"] == STATUS_SCREENED:
                 return
             txn.set(
@@ -141,8 +144,7 @@ def screen_document(
                     "screening_failed_observed_at": now_iso(),
                 },
             )
-            audit_ref = layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"])
-            if not layout.txn_get_dict(txn, audit_ref):
+            if not audit_exists:
                 txn.create(audit_ref, audit)
 
         layout.run_in_transaction(db, _write)
