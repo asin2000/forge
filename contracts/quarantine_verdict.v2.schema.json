@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:quarantine_verdict.v2",
+  "title": "Cyber Trust quarantine verdict",
+  "description": "The ONLY artifact Cyber Trust publishes about an external document: a non-executable verdict plus tightly-typed safe metadata. Raw document content never appears on the bus (SEC-4, AGT-5). If released is false, safe_metadata must be absent. Traceability: SEC-1, SEC-2, SEC-4, AGT-5. All data synthetic (SUB-5). (v2: envelope.v2 per DAT-2/OBS-1; payload unchanged from v1.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v2.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "quarantine_verdict.v2"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_ref",
+        "screening",
+        "released"
+      ],
+      "properties": {
+        "document_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "quarantine_uri",
+            "sha256"
+          ],
+          "properties": {
+            "quarantine_uri": {
+              "type": "string",
+              "pattern": "^gs://[a-z0-9._-]+/quarantine/[A-Za-z0-9._/-]+$"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "screening": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "parser_ok",
+            "model_armor",
+            "classifier"
+          ],
+          "properties": {
+            "parser_ok": {
+              "type": "boolean"
+            },
+            "model_armor": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "verdict"
+              ],
+              "properties": {
+                "verdict": {
+                  "enum": [
+                    "clean",
+                    "flagged"
+                  ]
+                },
+                "categories": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z_]{2,40}$"
+                  }
+                }
+              }
+            },
+            "classifier": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "model_id",
+                "confidence"
+              ],
+              "properties": {
+                "label": {
+                  "enum": [
+                    "benign",
+                    "suspicious",
+                    "malicious"
+                  ]
+                },
+                "model_id": {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            }
+          }
+        },
+        "released": {
+          "type": "boolean",
+          "description": "True only when parser, Model Armor, and classifier all completed and passed (SEC-1); any error leaves this false (SEC-2)."
+        },
+        "safe_metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "candidate_part_identifier": {
+              "type": "string",
+              "pattern": "^[A-Z0-9][A-Z0-9-]{3,31}$"
+            },
+            "vendor_name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9 .,&'-]{2,80}$"
+            },
+            "document_date": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "released": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "safe_metadata"
+          ]
+        }
+      }
+    }
+  }
+}

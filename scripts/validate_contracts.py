@@ -66,7 +66,7 @@ def main() -> int:
 
     exampled = {p.name.removesuffix(".example.json") for p in EXAMPLES.glob("*.example.json")}
     for name in schemas:
-        if name != "envelope.v1" and name not in exampled:
+        if not name.startswith("envelope.v") and name not in exampled:
             failures.append(f"{name}: schema has no example in /contracts/examples")
 
     if failures:

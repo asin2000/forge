@@ -1,0 +1,46 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-approval-request-01",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "idempotency_key": "idem-approval_request-0001",
+    "schema_version": "approval_request.v2",
+    "data_origin": "SYNTHETIC",
+    "trust_state": "TRUSTED"
+  },
+  "payload": {
+    "approval_id": "apr-gx12-07-sched-01",
+    "action_type": "schedule_override",
+    "recommended_action": "Accept 10-day recovery schedule pending arrival of approved part HYD-ACT-4402.",
+    "source_refs": [
+      "sourcing_report:6a1f0000-0000-4000-8000-000000000031",
+      "plan-gx12-07-hyd-a"
+    ],
+    "extracted_facts": [
+      "Approved part HYD-ACT-4402 delayed 10 days.",
+      "No approved alternate part exists in the registry."
+    ],
+    "applicable_rules": [
+      "SP-SCHED-140",
+      "SP-PART-101"
+    ],
+    "constraints": [
+      "Equipment remains NMC until release approval.",
+      "Only hydraulic-qualified technicians may execute TC-201/TC-202."
+    ],
+    "confidence": 0.92,
+    "alternatives_considered": [
+      {
+        "option": "Substitute part HYD-ACT-9901X from vendor bulletin",
+        "rejected_reason": "Vetoed by Safety: not in approved-parts registry (SP-PART-101)."
+      }
+    ],
+    "versions": {
+      "agent_id": "orchestrator-01",
+      "model_id": "gemini-3.5-flash",
+      "prompt_version": "orc-p1",
+      "schema_version": "approval_request.v1"
+    }
+  }
+}

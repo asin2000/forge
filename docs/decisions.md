@@ -17,3 +17,28 @@
 - 2026-08-21 · Dependencies: `google-adk` (PLT-2 mandate), `jsonschema` +
   `referencing` (contract validation), `pyyaml` (traceability/manifest gates);
   exact pins in `requirements.lock`.
+
+## 2026-08-21 — v1.2 baseline landed (branch `v1.2-baseline`)
+
+- **Envelope v2 cascade.** DAT-2 adds `data_origin` (const `SYNTHETIC`) and
+  `trust_state` (`TRUSTED|UNSCREENED|QUARANTINED`) to the ICD-4 envelope;
+  OBS-1 makes `trace_id` a read-only mirror of the 32-hex OTel trace ID
+  (pattern-enforced in v2). Merged schemas are immutable (ICD-3), so every bus
+  message type was bumped to `.v2`; the `.v1` files remain as history.
+  `MESSAGE_TYPES` in `forge_common.contracts` lists only the ACTIVE versions
+  (v2) — a v1 message is rejected at runtime by design.
+- **Registry model (REG).** `agents/registry.yaml` holds declarative agent
+  DEFINITIONS only (lifecycle: DRAFT/APPROVED/DEPRECATED/RETIRED). Runtime
+  instances (IDLE/RESERVE/ACTIVE/FAILED) and derived health
+  (HEALTHY/STALE/UNKNOWN) live in Firestore. Scene 2 shows instance
+  transitions; the definition never changes state during the repair loop.
+- **Residency model (DAT-1).** `infra/residency.yaml` declares a jurisdiction
+  plus an approved location map — NOT one region literal (Gemini is `us`
+  multi-region; Firestore is regional and immutable once set). CI-9 will
+  validate deploy config against the map.
+- **Gate tweak.** `validate_contracts.py` example-exemption generalized from
+  `envelope.v1` to any `envelope.v*` (the envelope is a $ref fragment, not a
+  bus message type).
+- Old `docs/SUB6-authorization-request.md` deleted: v1.2 SUB-6 is an objective
+  preexisting-rights rule (see PREEXISTING_WORK.md); no member authorization
+  artifact exists anymore.

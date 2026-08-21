@@ -1,0 +1,38 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-quarantine-verdict-01",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "idempotency_key": "idem-quarantine_verdict-0001",
+    "schema_version": "quarantine_verdict.v2",
+    "data_origin": "SYNTHETIC",
+    "trust_state": "TRUSTED"
+  },
+  "payload": {
+    "document_ref": {
+      "quarantine_uri": "gs://forge-quarantine-demo/quarantine/vendor-bulletin-0001.pdf",
+      "sha256": "d2c3a1e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3"
+    },
+    "screening": {
+      "parser_ok": true,
+      "model_armor": {
+        "verdict": "flagged",
+        "categories": [
+          "prompt_injection"
+        ]
+      },
+      "classifier": {
+        "label": "malicious",
+        "model_id": "gemma-screening-v1",
+        "confidence": 0.97
+      }
+    },
+    "released": true,
+    "safe_metadata": {
+      "candidate_part_identifier": "HYD-ACT-9901X",
+      "vendor_name": "Nordwind Fluidics",
+      "document_date": "2026-08-20"
+    }
+  }
+}

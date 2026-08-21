@@ -1,0 +1,16 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-none",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "idempotency_key": "idem-due_event-0001",
+    "schema_version": "due_event.v2",
+    "data_origin": "SYNTHETIC",
+    "trust_state": "TRUSTED"
+  },
+  "payload": {
+    "due_at_logical": 10,
+    "purpose": "part_eta_reached"
+  }
+}

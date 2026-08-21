@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:roster_assignment.v2",
+  "title": "Technician roster assignment",
+  "description": "Workforce Agent domain output: technicians assigned per task code with the matching qualification record referenced. No waivers exist in the contract (AGT-3). Traceability: AGT-3. All data synthetic (SUB-5). (v2: envelope.v2 per DAT-2/OBS-1; payload unchanged from v1.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v2.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "roster_assignment.v2"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignments"
+      ],
+      "properties": {
+        "assignments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_code",
+              "technician_id",
+              "qualification_id"
+            ],
+            "properties": {
+              "task_code": {
+                "type": "string",
+                "pattern": "^TC-[0-9]{3}$"
+              },
+              "technician_id": {
+                "type": "string",
+                "pattern": "^T-[0-9]{4}$"
+              },
+              "qualification_id": {
+                "type": "string",
+                "pattern": "^Q-[A-Z]{3}-[0-9]{3}$"
+              },
+              "shift": {
+                "enum": [
+                  "day",
+                  "swing",
+                  "night"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

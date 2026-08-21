@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:audit_event.v2",
+  "title": "Audit event",
+  "description": "Append-only audit record with dual timestamps: observed_at is real system time, effective_at is the Logical Clock day (AUD-1, AUD-3). Traceability: AUD-1, AUD-3. All data synthetic (SUB-5). (v2: envelope.v2 per DAT-2/OBS-1; payload unchanged from v1.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v2.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "audit_event.v2"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_kind",
+        "agent_identity",
+        "input_sha256",
+        "output_sha256",
+        "reason_code",
+        "observed_at",
+        "effective_at"
+      ],
+      "properties": {
+        "event_kind": {
+          "enum": [
+            "decision",
+            "blocked_action",
+            "veto",
+            "approval",
+            "state_change",
+            "reassignment",
+            "escalation",
+            "quarantine",
+            "failure"
+          ]
+        },
+        "agent_identity": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "input_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "output_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{2,39}$"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "effective_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state_after": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z_]{2,39}$"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}

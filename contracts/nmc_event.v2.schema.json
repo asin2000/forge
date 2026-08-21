@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:nmc_event.v2",
+  "title": "NMC discrepancy event",
+  "description": "Reports a GX-12 vehicle non-mission-capable. Triggers Orchestrator decomposition (ORC-1). Traceability: ORC-1. All data synthetic (SUB-5). (v2: envelope.v2 per DAT-2/OBS-1; payload unchanged from v1.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v2.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "nmc_event.v2"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "equipment_id",
+        "discrepancy_code",
+        "description",
+        "reported_at"
+      ],
+      "properties": {
+        "equipment_id": {
+          "type": "string",
+          "pattern": "^GX12-(0[1-9]|1[0-2])$"
+        },
+        "discrepancy_code": {
+          "type": "string",
+          "pattern": "^DSC-[0-9]{4}$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 2000
+        },
+        "reported_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

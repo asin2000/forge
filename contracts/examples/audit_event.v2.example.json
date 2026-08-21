@@ -1,0 +1,23 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-none",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "idempotency_key": "idem-audit_event-0001",
+    "schema_version": "audit_event.v2",
+    "data_origin": "SYNTHETIC",
+    "trust_state": "TRUSTED"
+  },
+  "payload": {
+    "event_kind": "reassignment",
+    "agent_identity": "orchestrator-01",
+    "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "reason_code": "WORKFORCE_MALFORMED_RETRY_EXHAUSTED",
+    "observed_at": "2026-08-21T14:12:06Z",
+    "effective_at": 0,
+    "state_after": "PLANNING",
+    "detail": "wp-roster-01 ownership transferred agent-workforce-01 -> agent-workforce-02."
+  }
+}

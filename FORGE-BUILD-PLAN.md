@@ -16,7 +16,7 @@ This plan schedules the build; it does not amend the baseline. If this plan and 
 - Video: ~4 minutes; must show problem, value proposition, live demo, and visible proof the backend runs on Google Cloud (SUB-1 ✓).
 - Devpost form additionally requires a **text description** (features, technologies, data sources, learnings) — not itemized in the spec's SUB list; scheduled Day 9–10 below.
 - Hosted URL optional; app need not be publicly live. Optional bonus: blog/video or #AllThingsAgenticHackathon social post.
-- Employer-entry rule: entering on behalf of Anansi Labs requires consent — SUB-6's written authorization satisfies this. **Human dependency: request it Day 1, hold it before submission.**
+- Entry basis (corrected and ratified 2026-08-21): **individual/solo entry by Armond E. Sinclair** — Anansi Labs is affiliation only, not the submitting organization; any prize is payable to the entrant personally. Prize targets: Fortified Enterprise Fleet + Individual/Hobbyist (Best Team/Solo Build); Startup Excellence not pursued. Per the official rules, one submission may be considered for multiple prizes but can receive only one. SUB-6 (v1.2) is an objective preexisting-rights requirement — no organizational authorization or member sign-off; compliance is the entrant's own, verified against `PREEXISTING_WORK.md` and the repo before submission. Full official-rules capture proceeds in parallel: it must be complete before submission but does not block the build.
 
 ## 2. Calendar
 
@@ -37,7 +37,7 @@ This plan schedules the build; it does not amend the baseline. If this plan and 
 ## 3. Day Detail
 
 ### Day 1 — Fri Aug 21 · Foundations & Contracts
-Repo created; branch protection — PRs only, no direct commits to `main` (CI preamble). Directory scaffold: `/contracts` (+`/contracts/examples`), `/prompts`, `/requirements`, `/architecture`, one service directory per role. **All inter-agent JSON schemas written today, before any endpoint code (ICD-1), each message carrying `workflow_id`, `work_package_id`, `event_id`, `trace_id`, `idempotency_key`, `schema_version` (ICD-4).** Contract validation harness at publish and subscribe (ICD-2 groundwork); schema versioning rule wired into CI (ICD-3). `requirements/traceability.yaml` and `architecture/manifest.yaml` skeletons (DFT-1, DFT-5). CI Lane 1 seed: Ruff (CI-1), contract gate (CI-2), secrets scan (CI-7). GCP: project, billing, APIs enabled, region pinned; **Model Armor and Vertex `gemini-3.5-flash` smoke calls today** (see risk R2). Send SUB-6 authorization request to both Anansi Labs members.
+Repo created; branch protection — PRs only, no direct commits to `main` (CI preamble). Directory scaffold: `/contracts` (+`/contracts/examples`), `/prompts`, `/requirements`, `/architecture`, one service directory per role. **All inter-agent JSON schemas written today, before any endpoint code (ICD-1), each message carrying `workflow_id`, `work_package_id`, `event_id`, `trace_id`, `idempotency_key`, `schema_version` (ICD-4).** Contract validation harness at publish and subscribe (ICD-2 groundwork); schema versioning rule wired into CI (ICD-3). `requirements/traceability.yaml` and `architecture/manifest.yaml` skeletons (DFT-1, DFT-5). CI Lane 1 seed: Ruff (CI-1), contract gate (CI-2), secrets scan (CI-7). GCP: project, billing, APIs enabled, region pinned; **Model Armor and Vertex `gemini-3.5-flash` smoke calls today** (see risk R2). Draft the `PREEXISTING_WORK.md` skeleton with the three SUB-4 statements (conceptual-background-only citation; no pilot materials incorporated; all FORGE materials created by the entrant during the Submission Period).
 **Exit: CI green on scaffold; every contract schema + example validating; GCP smoke calls succeed.**
 
 ### Day 2 — Sat Aug 22 · Messaging Backbone & State
@@ -73,14 +73,14 @@ CI-8: 10 consecutive clean spine runs on deployed infrastructure with live model
 **Exit: CI-8 10/10 logged; video uploaded; repo submission-ready.**
 
 ### Day 10 — Sun Aug 30 · Submit
-Confirm SUB-6 written authorization from both members is in hand (requested Day 1). Complete Devpost: description, video link, repo link, architecture diagram, judge access instructions. **Submit by Sunday evening Aug 30 — roughly a day of margin (SUB-7).**
+Verify SUB-6 preexisting-rights compliance: `PREEXISTING_WORK.md` final, repository inspected against the no-company-materials rule. Submit as an individual entry; list Anansi Labs only where the form asks for affiliation. Complete Devpost: description, video link, repo link, architecture diagram, judge access instructions. **Submit by Sunday evening Aug 30 — roughly a day of margin (SUB-7).**
 
 ### Mon Aug 31 · Buffer
 No planned work. Devpost edit/resubmit window only, closes 5:00 PM PT.
 
 ## 4. Risk Register
 
-- **R1 — SUB-6 authorization is a human dependency.** Mitigation: request in writing Day 1; track daily; submission blocks without it.
+- **R1 — SUB-6 preexisting-rights compliance.** No external dependency remains, but the rule is submission-blocking if violated. Mitigation: `PREEXISTING_WORK.md` skeleton on Day 1, finalized by Day 9; repository inspected against the no-company-materials rule before submission; CI-7 secrets scanning backstops accidental inclusion.
 - **R2 — Model Armor availability/quota in the pinned region.** Least-familiar service in the stack; discovering an enablement problem on Day 5 is too late. Mitigation: smoke call Day 1 during GCP setup; fallback discussion forced Day 2 if it fails.
 - **R3 — CI-8 flakiness with live models.** 10/10 consecutive is unforgiving. Mitigation: AGT-7 schema-constrained outputs + bounded retries are the design answer; Day 9 morning reserved; repeated failure is a demo-spine defect, permitted under the freeze.
 - **R4 — Schedule slip.** The backbone and heaviest agent build (Days 2–4) run through the weekend, and the acceptance/video push (Days 9–10) lands on the final weekend. Jettison order: Gemma bonus first (already priced by PLT-5), then Day 10 slack. The spine itself is not negotiable.

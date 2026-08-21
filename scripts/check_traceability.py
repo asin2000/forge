@@ -24,11 +24,14 @@ EXPECTED_IDS = (
     + [f"SEC-{i}" for i in range(1, 5)]
     + [f"HUM-{i}" for i in range(1, 3)]
     + [f"AUD-{i}" for i in range(1, 4)]
+    + [f"REG-{i}" for i in range(1, 6)]  # v1.2
+    + [f"OBS-{i}" for i in range(1, 3)]  # v1.2
+    + [f"DAT-{i}" for i in range(1, 4)]  # v1.2
     + [f"ICD-{i}" for i in range(1, 7)]
     + [f"PLT-{i}" for i in range(1, 7)]
-    + [f"CI-{i}" for i in range(1, 9)]
+    + [f"CI-{i}" for i in range(1, 10)]  # v1.2: CI-9
     + [f"DFT-{i}" for i in range(1, 6)]
-    + [f"SUB-{i}" for i in range(1, 8)]
+    + [f"SUB-{i}" for i in range(1, 9)]  # v1.2: SUB-8
 )
 METHODS = {"test", "inspection", "demonstration", "document"}
 

@@ -1,0 +1,22 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-work-package-assignment-01",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "idempotency_key": "idem-work_package_assignment-0001",
+    "schema_version": "work_package_assignment.v2",
+    "data_origin": "SYNTHETIC",
+    "trust_state": "TRUSTED"
+  },
+  "payload": {
+    "role": "maintenance",
+    "objective": "Produce maintenance action plan for GX12-07 failed hydraulic actuator.",
+    "inputs": {
+      "equipment_id": "GX12-07",
+      "discrepancy_code": "DSC-4411"
+    },
+    "assigned_agent_id": "agent-maintenance-01",
+    "assignment_seq": 1
+  }
+}

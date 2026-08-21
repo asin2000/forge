@@ -21,18 +21,18 @@ CONTRACTS_DIR = Path(__file__).resolve().parents[2] / "contracts"
 #: Message types allowed on the agent bus. The workflow_state schema is
 #: internal Firestore state and deliberately NOT registered here.
 MESSAGE_TYPES = (
-    "nmc_event.v1",
-    "work_package_assignment.v1",
-    "maintenance_action_plan.v1",
-    "sourcing_report.v1",
-    "roster_assignment.v1",
-    "validation_verdict.v1",
-    "quarantine_verdict.v1",
-    "approval_request.v1",
-    "approval_decision.v1",
-    "agent_failure_event.v1",
-    "due_event.v1",
-    "audit_event.v1",
+    "nmc_event.v2",
+    "work_package_assignment.v2",
+    "maintenance_action_plan.v2",
+    "sourcing_report.v2",
+    "roster_assignment.v2",
+    "validation_verdict.v2",
+    "quarantine_verdict.v2",
+    "approval_request.v2",
+    "approval_decision.v2",
+    "agent_failure_event.v2",
+    "due_event.v2",
+    "audit_event.v2",
 )
 
 
