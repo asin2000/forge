@@ -84,3 +84,51 @@ def plan_violations(plan_payload: dict[str, Any]) -> list[tuple[str, str]]:
                 )
             )
     return violations
+
+
+def is_part_approved_for(part_number: str, discrepancy_code: str) -> bool:
+    """Approval is DISCREPANCY-SPECIFIC (AGT-2): a part approved for one
+    discrepancy is not thereby approved for another."""
+    entry = approved_parts().get(part_number)
+    return bool(entry) and discrepancy_code in entry.get("applicable_discrepancies", [])
+
+
+def sourcing_facts(part_number: str) -> dict[str, Any] | None:
+    """Synthetic supply-chain state for a part (shipment_status, eta_days)."""
+    entry = approved_parts().get(part_number)
+    if entry is None:
+        return None
+    return {"shipment_status": entry["shipment_status"], "eta_days": entry["eta_days"]}
+
+
+def sourcing_violations(report_payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Data-backed safety check of a sourcing report (AGT-4)."""
+    violations: list[tuple[str, str]] = []
+    if report_payload.get("part_approved") and not is_part_approved(
+        report_payload.get("part_number", "")
+    ):
+        violations.append(
+            (
+                "SP-PART-001",
+                f"sourcing report claims approval for unregistered part "
+                f"{report_payload.get('part_number')}",
+            )
+        )
+    return violations
+
+
+def roster_violations(roster_payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Data-backed safety check of a roster (AGT-4 / SP-QUAL-001)."""
+    violations: list[tuple[str, str]] = []
+    for item in roster_payload.get("assignments", []):
+        if qualification_for(item["technician_id"], item["task_code"]) != item.get(
+            "qualification_id"
+        ):
+            violations.append(
+                (
+                    "SP-QUAL-001",
+                    f"{item['technician_id']} does not hold {item.get('qualification_id')} "
+                    f"for {item['task_code']}",
+                )
+            )
+    return violations

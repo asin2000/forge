@@ -156,7 +156,7 @@ def test_supply_unapproved_part_reported_honestly_publishes():
             "part_number": "VND-ACT-9901",
             "part_approved": False,  # honest about the registry
             "shipment_status": "not_ordered",
-            "eta_days": 30,
+            "eta_days": 0,
         }
     )
     process_message(
@@ -275,7 +275,7 @@ def test_safety_approves_compliant_plan():
     assert out["envelope"]["schema_version"] == "validation_verdict.v2"
     assert out["payload"]["verdict"] == "approved"
     trail = state.reconstruct_audit_trail(db, WF)
-    assert trail[-1]["payload"]["reason_code"] == "PLAN_APPROVED"
+    assert trail[-1]["payload"]["reason_code"] == "ACTION_APPROVED"
 
 
 def test_safety_cannot_approve_unapproved_part():
@@ -314,7 +314,7 @@ def test_safety_vetoes_with_cited_rules():
     assert out["payload"]["verdict"] == "vetoed"
     trail = state.reconstruct_audit_trail(db, WF)
     veto = trail[-1]["payload"]
-    assert veto["event_kind"] == "veto" and veto["reason_code"] == "PLAN_VETOED"
+    assert veto["event_kind"] == "veto" and veto["reason_code"] == "ACTION_VETOED"
 
 
 # ---------- Repair loop (ORC-3) ----------
@@ -437,3 +437,245 @@ def test_timeout_detection_flows_into_repair():
         db, timeout_event, make_failure_handler(db), consumer_identity="forge-orchestrator"
     )
     assert wp_ref.get().to_dict()["owner_instance_id"] == "agent-workforce-02"
+
+
+# ---------- Day 4 closeout regressions (entrant review) ----------
+
+
+def wp_doc(db, role="workforce"):
+    return (
+        db.collection("workflows")
+        .document(WF)
+        .collection("work_packages")
+        .document(f"wp-{role}-{WF.removeprefix('wf-')}")
+        .get()
+        .to_dict()
+    )
+
+
+def test_successful_specialist_marks_completed_and_never_times_out():
+    """Gap 1: a valid output flips the package to COMPLETED atomically, so
+    the monitor cannot falsely time it out afterwards."""
+    from forge_common.messages import deterministic_trace_id as _trace
+
+    db = ready_db()
+
+    def _claim(txn):
+        registry.claim_work_package(
+            txn,
+            db,
+            workflow_id=WF,
+            work_package_id=f"wp-supply-{WF.removeprefix('wf-')}",
+            instance_id="agent-supply-01",
+            role="supply",
+            objective="Source the actuator.",
+            inputs=NMC_INPUTS,
+        )
+
+    layout.run_in_transaction(db, _claim)
+    truthful = stub_json(
+        {
+            "part_number": "HYD-ACT-4402",
+            "part_approved": True,
+            "shipment_status": "delayed",
+            "eta_days": 21,
+        }
+    )
+    process_message(
+        db,
+        assignment_message("supply"),
+        make_supply_handler(db, truthful),
+        consumer_identity="forge-supply",
+    )
+    assert wp_doc(db, "supply")["status"] == "COMPLETED"
+    # Even with an ancient assignment timestamp, COMPLETED is exempt.
+    ref = (
+        db.collection("workflows")
+        .document(WF)
+        .collection("work_packages")
+        .document(f"wp-supply-{WF.removeprefix('wf-')}")
+    )
+    ref.set({**ref.get().to_dict(), "assigned_observed_at": "2026-08-21T00:00:00.000000Z"})
+    flagged = run_monitoring_cycle(
+        db, trace_id_for=lambda wf: _trace(wf), now="2026-08-21T09:00:00.000000Z"
+    )
+    assert flagged == []
+
+
+def test_source_failure_marks_failed_pending_repair():
+    db = ready_db()
+
+    def _claim(txn):
+        registry.claim_work_package(
+            txn,
+            db,
+            workflow_id=WF,
+            work_package_id=f"wp-supply-{WF.removeprefix('wf-')}",
+            instance_id="agent-supply-01",
+            role="supply",
+            objective="Source the actuator.",
+        )
+
+    layout.run_in_transaction(db, _claim)
+    lying = stub_json(
+        {
+            "part_number": "VND-ACT-9901",
+            "part_approved": True,
+            "shipment_status": "ordered",
+            "eta_days": 2,
+        }
+    )
+    process_message(
+        db,
+        assignment_message("supply"),
+        make_supply_handler(db, lying),
+        consumer_identity="forge-supply",
+    )
+    assert wp_doc(db, "supply")["status"] == "FAILED_PENDING_REPAIR"
+
+
+def test_plan_handler_creates_workforce_assignment_from_real_flow():
+    """Gap 2: the Workforce package is created by consuming the ACTUAL
+    maintenance plan, not by hand."""
+    from services.orchestrator.handlers import make_plan_handler
+
+    db = ready_db()
+    plan = plan_message(["HYD-ACT-4402"])
+    assert process_message(db, plan, make_plan_handler(db), consumer_identity="forge-orchestrator")
+    wp = wp_doc(db, "workforce")
+    assert wp["owner_instance_id"] == "agent-workforce-01"
+    assert wp["inputs"]["task_codes"] == ["TC-101"]
+    assignment = next(
+        m
+        for m in outbox_messages(db)
+        if m["envelope"]["schema_version"] == "work_package_assignment.v2"
+    )
+    assert assignment["payload"]["role"] == "workforce"
+    assert assignment["payload"]["inputs"]["task_codes"] == ["TC-101"]
+
+
+def test_reassignment_preserves_inputs():
+    """Gap 3: the reserve receives the full work order, not an empty one."""
+    from services.orchestrator.handlers import make_plan_handler
+
+    db = ready_db()
+    plan = plan_message(["HYD-ACT-4402"])
+    process_message(db, plan, make_plan_handler(db), consumer_identity="forge-orchestrator")
+    assert process_message(
+        db,
+        failure_message("workforce", "agent-workforce-01"),
+        make_failure_handler(db),
+        consumer_identity="forge-orchestrator",
+    )
+    reassignment = next(
+        m
+        for m in outbox_messages(db)
+        if m["envelope"]["schema_version"] == "work_package_assignment.v2"
+        and m["payload"].get("reassigned_from")
+    )
+    assert reassignment["payload"]["assigned_agent_id"] == "agent-workforce-02"
+    assert reassignment["payload"]["inputs"]["task_codes"] == ["TC-101"]
+    assert wp_doc(db, "workforce")["inputs"]["task_codes"] == ["TC-101"]
+
+
+def test_stale_second_failure_is_total_noop():
+    """Gap 4: after a successful repair, a distinct stale failure for the
+    old owner changes NOTHING — no block, no audit, no output."""
+    db = ready_db()
+    claim_workforce_package(db)
+    handler = make_failure_handler(db)
+    process_message(
+        db,
+        failure_message("workforce", "agent-workforce-01"),
+        handler,
+        consumer_identity="forge-orchestrator",
+    )
+    status_before = db.collection("workflows").document(WF).get().to_dict()["status"]
+    trail_before = len(state.reconstruct_audit_trail(db, WF))
+    outbox_before = len(outbox_messages(db))
+    stale = failure_message("workforce", "agent-workforce-01", suffix="stale2")
+    assert process_message(db, stale, handler, consumer_identity="forge-orchestrator")
+    assert db.collection("workflows").document(WF).get().to_dict()["status"] == status_before
+    assert len(state.reconstruct_audit_trail(db, WF)) == trail_before
+    assert len(outbox_messages(db)) == outbox_before
+    assert wp_doc(db)["owner_instance_id"] == "agent-workforce-02"
+    assert registry.instance_ref(db, "agent-workforce-02").get().to_dict()["state"] == "ACTIVE"
+
+
+def test_supply_approval_is_discrepancy_specific():
+    """An approved ELECTRICAL part is NOT approved for the hydraulic
+    discrepancy."""
+    db = ready_db()
+    cross_sell = stub_json(
+        {
+            "part_number": "ELEC-HARN-2210",  # approved, but only for DSC-0311
+            "part_approved": True,
+            "shipment_status": "ordered",
+            "eta_days": 7,
+        }
+    )
+    process_message(
+        db,
+        assignment_message("supply"),  # inputs carry DSC-0042 (hydraulic)
+        make_supply_handler(db, cross_sell),
+        consumer_identity="forge-supply",
+    )
+    out = outbox_messages(db)[0]
+    assert out["envelope"]["schema_version"] == "agent_failure_event.v2"
+
+
+def test_supply_cannot_invent_shipment_status_or_eta():
+    db = ready_db()
+    optimistic = stub_json(
+        {
+            "part_number": "HYD-ACT-4402",
+            "part_approved": True,
+            "shipment_status": "in_transit",  # data says delayed
+            "eta_days": 2,  # data says 21
+        }
+    )
+    process_message(
+        db,
+        assignment_message("supply"),
+        make_supply_handler(db, optimistic),
+        consumer_identity="forge-supply",
+    )
+    out = outbox_messages(db)[0]
+    assert out["envelope"]["schema_version"] == "agent_failure_event.v2"
+
+
+def test_safety_validates_sourcing_and_rosters():
+    """AGT-4: every proposed action is validated, not only plans."""
+    from services.safety.handlers import make_validation_handler
+
+    db = ready_db()
+    report = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            work_package_id=f"wp-supply-{WF.removeprefix('wf-')}",
+            schema_version="sourcing_report.v2",
+            event_id=deterministic_event_id("t-report", WF),
+            trace_id=TRACE,
+            idempotency_key="idem-t-report-01",
+        ),
+        "payload": {
+            "part_number": "VND-ACT-9901",
+            "part_approved": True,  # violation: unregistered part
+            "shipment_status": "ordered",
+            "eta_days": 2,
+        },
+    }
+    verdict_stub = stub_json(
+        {
+            "subject_event_id": report["envelope"]["event_id"],
+            "verdict": "vetoed",
+            "rule_refs": ["SP-PART-001"],
+            "reasons": ["Unregistered part claimed as approved."],
+        }
+    )
+    process_message(
+        db, report, make_validation_handler(db, verdict_stub), consumer_identity="forge-safety"
+    )
+    verdict = outbox_messages(db)[0]
+    assert verdict["envelope"]["schema_version"] == "validation_verdict.v2"
+    assert verdict["payload"]["verdict"] == "vetoed"

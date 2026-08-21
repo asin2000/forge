@@ -199,3 +199,28 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   malformed/contract failures are emitted at the source by StructuredAgent.
 - Riders: REG-2 negative race + full repair loop proven on the REAL
   Firestore emulator; ADK smoke artifact now carries exact captured stdout.
+
+## 2026-08-24 — Day 4 closeout (entrant HOLD): package lifecycle + real flow
+
+- **Package lifecycle (gap 1).** Specialists flip their package
+  COMPLETED / FAILED_PENDING_REPAIR atomically with their output
+  (TxnWrites.work_package_status_updates; skip-guarded so a stale worker's
+  late output cannot flip a reassigned package). The monitor times out only
+  ASSIGNED packages — successful agents can never be falsely failed.
+- **Real Workforce flow (gap 2).** make_plan_handler consumes the actual
+  maintenance plan, extracts task codes, discovers workforce via the
+  registry, and claims + assigns — the repair scene is reachable from an
+  NMC event end to end.
+- **Inputs preserved (gap 3).** Claims store the work order inputs; the
+  reserve's seq-2 assignment carries them verbatim.
+- **Stale failures are total no-ops (gap 4).** The failure handler consumes
+  a stale event with zero writes; the commit-time guard bundles the audit +
+  seq-2 assignment INTO the reassignment application, so a plan that turns
+  stale commits nothing (no block, no audit, no output).
+- **Supply fully data-backed.** Approval is discrepancy-specific
+  (is_part_approved_for); shipment_status/eta_days come from the synthetic
+  supply-chain facts (HYD-ACT-4402: delayed/21 — the spine's Scene 3 driver);
+  unknown parts must report not_ordered/0. Prompt bumped to v3.
+- **Safety validates every proposed action (AGT-4):** plans, sourcing
+  reports, and rosters, each against its data-backed compliance engine;
+  reason codes generalized to ACTION_APPROVED/ACTION_VETOED.

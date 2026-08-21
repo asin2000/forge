@@ -185,6 +185,7 @@ def make_nmc_handler(db: Any, *, model: Any):
                     "instance_id": instance_id,
                     "role": role,
                     "objective": decomposition["objectives"][role],
+                    "inputs": payload,
                 }
             )
         writes.transition = {
@@ -216,6 +217,16 @@ def make_failure_handler(db: Any):
         trace_id = envelope["trace_id"]
         role = payload["role"]
         work_package_id = envelope["work_package_id"]
+        snapshot = layout.work_package_ref(db, workflow_id, work_package_id).get()
+        wp = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+        if wp and (
+            wp.get("owner_instance_id") != payload["agent_id"] or wp.get("status") == "COMPLETED"
+        ):
+            # Stale failure event: ownership already moved on, or the package
+            # completed. Consume with NO writes — no block, no audit, no
+            # output. The commit-time ownership guard covers the race window
+            # (a reassignment plan that turns stale commits nothing either).
+            return
         if role != "workforce":
             _make_escalation(
                 db,
@@ -242,46 +253,45 @@ def make_failure_handler(db: Any):
                 error="workforce reserve is not available (ORC-3)",
             )
             return
-        snapshot = layout.work_package_ref(db, workflow_id, work_package_id).get()
-        wp = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
         objective = (wp or {}).get("objective") or "Re-execute the failed work package."
         seq = int((wp or {}).get("assignment_seq", 1)) + 1
-        writes.reassignments.append(
-            {
-                "work_package_id": work_package_id,
-                "failed_instance_id": payload["agent_id"],
-                "reserve_instance_id": reserve["instance_id"],
-            }
-        )
         reassignment = build_assignment(
             workflow_id=workflow_id,
             trace_id=trace_id,
             role="workforce",
             objective=objective,
             instance_id=reserve["instance_id"],
-            inputs=(wp or {}).get("inputs", {}),
+            inputs=(wp or {}).get("inputs", {}),  # gap 3: inputs preserved
             assignment_seq=seq,
         )
         reassignment["payload"]["reassigned_from"] = payload["agent_id"]
         validate_message(reassignment)
-        writes.outbox_messages.append(reassignment)
-        writes.audit_events.append(
-            build_audit_event(
-                workflow_id=workflow_id,
-                trace_id=trace_id,
-                agent_identity=ORCHESTRATOR_IDENTITY,
-                event_kind="reassignment",
-                reason_code="WORKFORCE_RESERVE_DEPLOYED",
-                input_obj=payload,
-                output_obj={
-                    "work_package_id": work_package_id,
-                    "from": payload["agent_id"],
-                    "to": reserve["instance_id"],
-                    "assignment_seq": seq,
-                },
-                effective_at=read_clock(db),
-                work_package_id=work_package_id,
-            )
+        audit_event = build_audit_event(
+            workflow_id=workflow_id,
+            trace_id=trace_id,
+            agent_identity=ORCHESTRATOR_IDENTITY,
+            event_kind="reassignment",
+            reason_code="WORKFORCE_RESERVE_DEPLOYED",
+            input_obj=payload,
+            output_obj={
+                "work_package_id": work_package_id,
+                "from": payload["agent_id"],
+                "to": reserve["instance_id"],
+                "assignment_seq": seq,
+            },
+            effective_at=read_clock(db),
+            work_package_id=work_package_id,
+        )
+        # Bundled: audit + seq-2 assignment commit ONLY if the transfer
+        # applies — a stale reassignment is a transactional no-op (gap 4).
+        writes.reassignments.append(
+            {
+                "work_package_id": work_package_id,
+                "failed_instance_id": payload["agent_id"],
+                "reserve_instance_id": reserve["instance_id"],
+                "audit_event": audit_event,
+                "assignment_message": reassignment,
+            }
         )
 
     return handle
@@ -316,3 +326,61 @@ def _make_escalation(
             effective_at=read_clock(db),
         )
     )
+
+
+def make_plan_handler(db: Any):
+    """Handler for maintenance_action_plan.v2: create the Workforce
+    assignment from the ACTUAL workflow (gap 2 — the repair scene is
+    reachable from an NMC event, not a hand-built package).
+
+    Extracts the plan's task codes, discovers the workforce capability via
+    the registry, and commits the exclusive ownership claim + assignment
+    atomically with the inbox marker. NoCapableAgent escalates + blocks.
+    """
+
+    def handle(message: dict[str, Any], writes: TxnWrites) -> None:
+        envelope = message["envelope"]
+        plan = message["payload"]
+        workflow_id = envelope["workflow_id"]
+        trace_id = envelope["trace_id"]
+        task_codes = [task["task_code"] for task in plan.get("tasks", [])]
+        inputs = {
+            "task_codes": task_codes,
+            "equipment_id": plan["equipment_id"],
+            "plan_id": plan["plan_id"],
+        }
+        try:
+            resolved = registry.discover(db, "technician-assignment")
+        except registry.NoCapableAgent as exc:
+            _make_escalation(
+                db,
+                writes,
+                workflow_id=workflow_id,
+                trace_id=trace_id,
+                reason_code="NO_CAPABLE_AGENT",
+                payload=plan,
+                error=str(exc),
+            )
+            return
+        instance_id = resolved["instance"]["instance_id"]
+        objective = f"Staff maintenance plan {plan['plan_id']} ({', '.join(task_codes)})."
+        assignment = build_assignment(
+            workflow_id=workflow_id,
+            trace_id=trace_id,
+            role="workforce",
+            objective=objective,
+            instance_id=instance_id,
+            inputs=inputs,
+        )
+        writes.outbox_messages.append(assignment)
+        writes.work_package_claims.append(
+            {
+                "work_package_id": assignment["envelope"]["work_package_id"],
+                "instance_id": instance_id,
+                "role": "workforce",
+                "objective": objective,
+                "inputs": inputs,
+            }
+        )
+
+    return handle

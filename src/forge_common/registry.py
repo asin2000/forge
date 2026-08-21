@@ -158,6 +158,7 @@ def claim_work_package(
     instance_id: str,
     role: str,
     objective: str = "",
+    inputs: dict[str, Any] | None = None,
 ) -> None:
     """Create the exclusive-ownership record for a work package (ORC-1).
 
@@ -173,6 +174,7 @@ def claim_work_package(
             "owner_instance_id": instance_id,
             "role": role,
             "objective": objective,
+            "inputs": inputs or {},
             "status": "ASSIGNED",
             "assignment_seq": 1,
             "assigned_observed_at": now_iso(),
@@ -211,7 +213,10 @@ def check_reassignment(
     wp = layout.txn_get_dict(txn, layout.work_package_ref(db, workflow_id, work_package_id))
     if not wp:
         raise IneligibleAssignment(f"work package {work_package_id} does not exist")
-    if wp.get("owner_instance_id") != failed_instance_id:
+    if wp.get("owner_instance_id") != failed_instance_id or wp.get("status") == "COMPLETED":
+        # Stale failure event (ownership already transferred, or the package
+        # completed): the ENTIRE reassignment — transfer, audit, seq-2
+        # assignment — is a transactional no-op.
         return {"skip": True, "work_package": wp}
     reserve = layout.txn_get_dict(txn, instance_ref(db, reserve_instance_id))
     if not reserve or reserve.get("state") != "RESERVE":
@@ -231,10 +236,15 @@ def apply_reassignment(
     failed_instance_id: str,
     reserve_instance_id: str,
     plan: dict[str, Any],
+    audit_event: dict[str, Any] | None = None,
+    assignment_message: dict[str, Any] | None = None,
 ) -> bool:
     """WRITES ONLY (after :func:`check_reassignment` in the same txn):
     atomically transfer ownership to the reserve, mark the failed instance
-    FAILED and the reserve ACTIVE (ORC-3). Returns False on skip."""
+    FAILED and the reserve ACTIVE, and write the bundled reassignment audit
+    event and seq-2 assignment (ORC-3). Returns False on skip — a skipped
+    plan writes NOTHING, so a stale failure leaves no audit, no outbox
+    message, and no state change."""
     if plan.get("skip"):
         return False
     wp = plan["work_package"]
@@ -244,10 +254,21 @@ def apply_reassignment(
             **wp,
             "owner_instance_id": reserve_instance_id,
             "reassigned_from": failed_instance_id,
+            "status": "ASSIGNED",
             "assignment_seq": int(wp.get("assignment_seq", 1)) + 1,
             "reassigned_observed_at": now_iso(),
         },
     )
+    if audit_event is not None:
+        txn.create(
+            layout.audit_ref(db, workflow_id, audit_event["envelope"]["event_id"]),
+            audit_event,
+        )
+    if assignment_message is not None:
+        txn.create(
+            layout.outbox_ref(db, workflow_id, assignment_message["envelope"]["event_id"]),
+            {"message": assignment_message, "published": False, "enqueued_at": now_iso()},
+        )
     txn.set(
         instance_ref(db, failed_instance_id),
         {"state": "FAILED", "state_changed_observed_at": now_iso()},
@@ -257,5 +278,48 @@ def apply_reassignment(
         instance_ref(db, reserve_instance_id),
         {"state": "ACTIVE", "state_changed_observed_at": now_iso()},
         merge=True,
+    )
+    return True
+
+
+def check_wp_status_update(
+    txn: Any,
+    db: Any,
+    *,
+    workflow_id: str,
+    work_package_id: str,
+    expected_owner: str,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """READS ONLY: decide whether a status update may apply.
+
+    Skips (writes nothing) when the package is missing, no longer ASSIGNED,
+    or owned by someone else — a stale worker's late output must not flip a
+    reassigned package's status.
+    """
+    wp = layout.txn_get_dict(txn, layout.work_package_ref(db, workflow_id, work_package_id))
+    if not wp or wp.get("status") != "ASSIGNED" or wp.get("owner_instance_id") != expected_owner:
+        return {"skip": True}
+    return {"skip": False, "work_package": wp}
+
+
+def apply_wp_status_update(
+    txn: Any,
+    db: Any,
+    *,
+    workflow_id: str,
+    work_package_id: str,
+    status: str,
+    plan: dict[str, Any],
+    **_ignored: Any,
+) -> bool:
+    """WRITES ONLY: mark the package COMPLETED or FAILED_PENDING_REPAIR —
+    atomically with the specialist's outbox message, so a successful agent
+    can never be falsely timed out afterwards (ORC-4)."""
+    if plan.get("skip"):
+        return False
+    txn.set(
+        layout.work_package_ref(db, workflow_id, work_package_id),
+        {**plan["work_package"], "status": status, "status_observed_at": now_iso()},
     )
     return True

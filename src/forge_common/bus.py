@@ -88,9 +88,14 @@ class TxnWrites:
     #: committing transaction, colliding if the package already has an owner.
     work_package_claims: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     #: atomic ownership transfers to a held reserve (ORC-3) — kwargs for
-    #: registry.check_reassignment/apply_reassignment minus db/workflow_id.
-    #: A transfer already applied (double-fired failure event) is skipped.
+    #: registry.check_reassignment/apply_reassignment minus db/workflow_id,
+    #: optionally bundling audit_event + assignment_message which commit ONLY
+    #: when the transfer applies. A stale transfer is a transactional no-op.
     reassignments: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    #: work-package status transitions (COMPLETED / FAILED_PENDING_REPAIR),
+    #: applied atomically with the rest of the plan; skipped when the package
+    #: is no longer ASSIGNED under the expected owner.
+    work_package_status_updates: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
 def _audit_rejection(
@@ -282,6 +287,10 @@ def process_message(
                 registry.check_reassignment(txn, db, workflow_id=workflow_id, **r)
                 for r in writes.reassignments
             ]
+            status_plans = [
+                registry.check_wp_status_update(txn, db, workflow_id=workflow_id, **u)
+                for u in writes.work_package_status_updates
+            ]
             if writes.transition is not None:
                 state.apply_transition(txn, db, workflow_id=workflow_id, **writes.transition)
             for claim in writes.work_package_claims:
@@ -289,6 +298,10 @@ def process_message(
             for reassignment, plan in zip(writes.reassignments, plans, strict=True):
                 registry.apply_reassignment(
                     txn, db, workflow_id=workflow_id, **reassignment, plan=plan
+                )
+            for update, plan in zip(writes.work_package_status_updates, status_plans, strict=True):
+                registry.apply_wp_status_update(
+                    txn, db, workflow_id=workflow_id, **update, plan=plan
                 )
             txn.set(
                 marker_ref,
