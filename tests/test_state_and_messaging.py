@@ -297,7 +297,15 @@ def test_handler_failure_leaves_no_partial_writes():
 
     with pytest.raises(RuntimeError):
         process_message(db, message, broken, consumer_identity="forge-orchestrator")
-    assert db.store == before
+    changed = {k: v for k, v in db.store.items() if db.store.get(k) != before.get(k)}
+    assert all(path[-2] == "inbox" for path in changed), changed  # only the claim
+    audits = list(db.collection("workflows").document(WF).collection("audit").stream())
+    assert len(audits) == 1  # only WORKFLOW_CREATED
+    # The released claim does not block redelivery:
+    assert (
+        process_message(db, message, lambda m, w: None, consumer_identity="forge-orchestrator")
+        is True
+    )
 
 
 def test_audit_trail_reconstructs_across_time_skip():
@@ -316,7 +324,8 @@ def test_audit_trail_reconstructs_across_time_skip():
         due_at=21,
     )
     trail = state.reconstruct_audit_trail(db, WF)
-    assert [e["payload"]["state_after"] for e in trail] == [
+    states = [e["payload"]["state_after"] for e in trail if "state_after" in e["payload"]]
+    assert states == [
         "INTAKE",
         "PLANNING",
         "VALIDATING",
@@ -362,7 +371,11 @@ def test_post_skip_events_carry_advanced_effective_at():
     )
     assert doc["logical_time"] == 21
     trail = state.reconstruct_audit_trail(db, WF)
-    by_state = {e["payload"]["state_after"]: e["payload"]["effective_at"] for e in trail}
+    by_state = {
+        e["payload"]["state_after"]: e["payload"]["effective_at"]
+        for e in trail
+        if "state_after" in e["payload"]
+    }
     assert by_state["SUSPENDED_AWAITING_PART"] == 0
     assert by_state["ASSEMBLY_RESUMED"] == 21
     assert by_state["RELEASED"] == 21
@@ -593,7 +606,11 @@ def test_handler_audit_events_are_validated_and_pinned():
     before = dict(db.store)
     with pytest.raises(ContractViolation, match="workflow"):
         process_message(db, message, wrong_workflow, consumer_identity="forge-safety")
-    assert db.store == before
+    changed = {k for k in db.store if db.store.get(k) != before.get(k)}
+    assert all(path[-2] == "inbox" for path in changed)  # only the released claim
+    assert not any(path[-2] == "audit" and path[1] != WF for path in db.store)
+    audits = list(db.collection("workflows").document(WF).collection("audit").stream())
+    assert len(audits) == 1  # only WORKFLOW_CREATED — the misrouted audit never landed
 
 
 def test_gate_requires_recorded_approval():
@@ -635,3 +652,142 @@ def test_due_events_recheck_state_transactionally():
     # Legitimate resume before the emitter runs: due event no longer valid.
     advance_to(db, ["ASSEMBLY_RESUMED"])
     assert emit_due_events(db, trace_id=TRACE) == []
+
+
+def test_concurrent_delivery_single_handler_execution():
+    """Claim/lease: a second worker cannot run the handler concurrently."""
+    from forge_common.bus import DeliveryInProgress
+
+    db = FakeFirestore()
+    make_workflow(db)
+    message = build_due_event(workflow_id=WF, trace_id=TRACE, due_at=21)
+    runs = []
+
+    def worker_b_interleaved(msg, writes: TxnWrites):
+        # Worker A's handler is mid-flight; worker B sees the live claim.
+        runs.append("A")
+        with pytest.raises(DeliveryInProgress):
+            process_message(
+                db, msg, lambda m, w: runs.append("B"), consumer_identity="forge-supply"
+            )
+
+    assert (
+        process_message(db, message, worker_b_interleaved, consumer_identity="forge-supply") is True
+    )
+    assert runs == ["A"]
+
+
+def test_expired_lease_is_taken_over():
+    """A crashed holder's expired claim is claimed by the next delivery."""
+    db = FakeFirestore()
+    make_workflow(db)
+    message = build_due_event(workflow_id=WF, trace_id=TRACE, due_at=21)
+    ran = []
+    # Simulate a crashed worker: claim exists, lease already expired.
+    with pytest.raises(RuntimeError):
+        process_message(
+            db,
+            message,
+            lambda m, w: (_ for _ in ()).throw(RuntimeError("crash")),
+            consumer_identity="forge-supply",
+        )
+    assert (
+        process_message(db, message, lambda m, w: ran.append(1), consumer_identity="forge-supply")
+        is True
+    )
+    assert ran == [1]
+
+
+def test_lost_claim_discards_effect_plan():
+    """A holder whose claim was taken over must not commit its stale plan."""
+    db = FakeFirestore()
+    make_workflow(db)
+    message = build_due_event(workflow_id=WF, trace_id=TRACE, due_at=21)
+
+    def usurped(msg, writes: TxnWrites):
+        # While this handler runs, its lease "expires" and another worker
+        # takes over and completes. Simulate by aging the lease, then letting
+        # a second worker finish first.
+        for path in list(db.store):
+            if path[-2] == "inbox":
+                db.store[path]["lease_expires_at"] = "2000-01-01T00:00:00.000000Z"
+        assert process_message(db, msg, lambda m, w: None, consumer_identity="forge-supply") is True
+        writes.audit_events.append(
+            build_audit_event(
+                workflow_id=WF,
+                trace_id=TRACE,
+                agent_identity="forge-supply",
+                event_kind="decision",
+                reason_code="STALE_PLAN",
+                input_obj={},
+                output_obj={},
+                effective_at=0,
+            )
+        )
+
+    assert process_message(db, message, usurped, consumer_identity="forge-supply") is False
+    audits = list(db.collection("workflows").document(WF).collection("audit").stream())
+    kinds = [d.to_dict()["payload"]["reason_code"] for d in audits]
+    assert "STALE_PLAN" not in kinds
+
+
+def test_rejected_approval_recording_is_audited():
+    """AUD-1: a rejected decision appears in the trail even with no transition."""
+    import json as _json
+
+    db = FakeFirestore()
+    make_workflow(db)
+    record_approval(db, "schedule_override", decision="rejected", approval_id="apr-rej-0001")
+    trail = state.reconstruct_audit_trail(db, WF)
+    recorded = [e for e in trail if e["payload"]["reason_code"] == "APPROVAL_RECORDED"]
+    assert len(recorded) == 1
+    evidence = _json.loads(recorded[0]["payload"]["detail"])["approval"]
+    assert evidence["decision"] == "rejected"
+    assert evidence["approver_identity"] == "approver@example.test"
+
+
+def test_untrusted_approval_record_rejected():
+    """DAT-2: the approval writer refuses non-TRUSTED records."""
+    db = FakeFirestore()
+    make_workflow(db)
+    message = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            schema_version="approval_decision.v2",
+            event_id=deterministic_event_id("apr", WF, "apr-bad-0001"),
+            trace_id=TRACE,
+            idempotency_key="idem-apr-bad-0001",
+            trust_state="UNSCREENED",
+        ),
+        "payload": {
+            "approval_id": "apr-bad-0001",
+            "action_type": "schedule_override",
+            "decision": "approved",
+            "approver_identity": "approver@example.test",
+            "decided_at": "2026-08-21T12:00:00Z",
+        },
+    }
+    with pytest.raises(state.GateBlocked, match="TRUSTED"):
+        state.record_approval_decision(db, message)
+
+
+def test_rejection_audit_fallbacks_are_pattern_safe():
+    """A wf- prefixed but invalid workflow_id and a 32-char non-hex trace
+    must not break the rejection audit itself."""
+    from forge_common.bus import UNROUTABLE_AUDIT_WORKFLOW
+    from forge_common.contracts import ContractViolation
+
+    db = FakeFirestore()
+    bad = {
+        "envelope": {
+            "workflow_id": "wf-UPPER_INVALID!!",
+            "trace_id": "Z" * 32,  # 32 chars, not hex
+        }
+    }
+    with pytest.raises(ContractViolation):
+        process_message(db, bad, lambda m, w: None, consumer_identity="forge-safety")
+    docs = list(
+        db.collection("workflows").document(UNROUTABLE_AUDIT_WORKFLOW).collection("audit").stream()
+    )
+    assert len(docs) == 1
+    assert docs[0].to_dict()["envelope"]["trace_id"] == "0" * 32
