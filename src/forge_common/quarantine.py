@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from forge_common import layout
 from forge_common.audit import now_iso
 from forge_common.messages import sha256_hex
 
@@ -65,6 +64,12 @@ class _QuarantineStoreBase:
             "ingested_observed_at": now_iso(),
         }
 
+    def validate_existing(
+        self, record: dict[str, Any], existing: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Public conflict check for the single ingestion transaction."""
+        return self._existing_or_conflict(record, existing)
+
     def _existing_or_conflict(
         self, record: dict[str, Any], existing: dict[str, Any] | None
     ) -> dict[str, Any] | None:
@@ -90,25 +95,18 @@ class FirestoreQuarantineStore(_QuarantineStoreBase):
     """EMULATOR-ONLY store: raw bytes inside the Firestore record. Never
     deploy this — production is :class:`GcsQuarantineStore`."""
 
-    def put(
+    def establish_object(
         self, *, doc_id: str, workflow_id: str, raw_text: str, source: str
-    ) -> tuple[dict[str, Any], bool]:
-        record = {
+    ) -> dict[str, Any]:
+        """Emulator store keeps raw bytes inside the metadata record: no
+        external object to establish — commits NOTHING to Firestore (the
+        single ingestion transaction owns that)."""
+        return {
             **self._metadata(
                 doc_id=doc_id, workflow_id=workflow_id, raw_text=raw_text, source=source
             ),
             "raw_text": raw_text,
         }
-
-        def _put(txn: Any) -> tuple[dict[str, Any], bool]:
-            existing = layout.txn_get_dict(txn, quarantine_ref(self._db, doc_id))
-            kept = self._existing_or_conflict(record, existing)
-            if kept is not None:
-                return kept, False
-            txn.create(quarantine_ref(self._db, doc_id), record)
-            return record, True
-
-        return layout.run_in_transaction(self._db, _put)
 
     def read_raw(self, doc_id: str) -> str:
         record = self.get(doc_id)
@@ -130,9 +128,10 @@ class GcsQuarantineStore(_QuarantineStoreBase):
     failure is safe and retryable, whereas metadata pointing at nonexistent
     bytes would strand the document. A precondition failure means the object
     already exists: its bytes are hash-verified against the new ingest
-    (mismatch -> QuarantineConflict; a concurrent different-content race has
-    exactly one winner). Only then is the Firestore metadata
-    created-or-validated, persisting the object GENERATION; reads verify the
+    (mismatch -> QuarantineConflict; a precondition loser with different
+    content gets a conflict, never an overwrite). The Firestore metadata AND
+    the DOCUMENT_QUARANTINED audit are then committed in ONE transaction by
+    ingest_document, persisting the object GENERATION; reads verify the
     downloaded bytes against the recorded SHA before screening.
     """
 
@@ -144,9 +143,13 @@ class GcsQuarantineStore(_QuarantineStoreBase):
             client = storage.Client()
         self._bucket = client.bucket(bucket)
 
-    def put(
+    def establish_object(
         self, *, doc_id: str, workflow_id: str, raw_text: str, source: str
-    ) -> tuple[dict[str, Any], bool]:
+    ) -> dict[str, Any]:
+        """Object-first (safe ordering step 1): establish/verify the GCS
+        object under the generation-zero precondition and return the stable
+        metadata record (with the object generation). Commits NOTHING to
+        Firestore — the single ingestion transaction owns metadata + audit."""
         from google.api_core.exceptions import PreconditionFailed
 
         record = self._metadata(
@@ -156,7 +159,6 @@ class GcsQuarantineStore(_QuarantineStoreBase):
         try:
             # Object FIRST, race-proof: generation 0 = "only if absent".
             blob.upload_from_string(raw_text, content_type="text/plain", if_generation_match=0)
-            object_new = True
         except PreconditionFailed:
             # Exists (previous crash-retry or a concurrent winner): verify
             # the stored bytes are OUR bytes before accepting them.
@@ -166,25 +168,11 @@ class GcsQuarantineStore(_QuarantineStoreBase):
                     f"doc_id {doc_id}: existing quarantine object bytes differ "
                     f"from this ingest (concurrent different-content race or reuse)"
                 ) from None
-            object_new = False
+            pass
         if blob.generation is None:  # populated by upload; fetch after 412 path
             blob.reload()
         record["gcs_generation"] = blob.generation
-
-        def _put(txn: Any) -> tuple[dict[str, Any], bool]:
-            existing = layout.txn_get_dict(txn, quarantine_ref(self._db, doc_id))
-            kept = self._existing_or_conflict(record, existing)
-            if kept is not None:
-                return kept, False
-            txn.create(quarantine_ref(self._db, doc_id), record)
-            # created=True: this call completed the ingest (even when the
-            # object pre-existed from a crashed earlier attempt — the audit
-            # belongs to whoever lands the metadata).
-            return record, True
-
-        stored, created = layout.run_in_transaction(self._db, _put)
-        del object_new  # object state is independent of audit ownership
-        return stored, created
+        return record
 
     def read_raw(self, doc_id: str) -> str:
         """Download the object and verify it against the recorded SHA —

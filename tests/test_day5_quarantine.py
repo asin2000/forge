@@ -513,98 +513,156 @@ def gcs_ready():
     return db, client, GcsQuarantineStore(db, bucket="forge-quarantine-demo", client=client)
 
 
+def gcs_workflow_ready():
+    db, client, store = gcs_ready()
+    state.create_workflow(
+        db, workflow_id=WF, equipment_id="GX12-07", trace_id=TRACE, logical_time=0
+    )
+    return db, client, store
+
+
+def ingest(db, store, **overrides):
+    kwargs = dict(
+        workflow_id=WF, doc_id=DOC, raw_text=BULLETIN, source="vendor-email", trace_id=TRACE
+    )
+    kwargs.update(overrides)
+    return ingest_document(db, store, **kwargs)
+
+
+def quarantine_audits(db):
+    return [
+        e
+        for e in state.reconstruct_audit_trail(db, WF)
+        if e["payload"]["reason_code"] == "DOCUMENT_QUARANTINED"
+    ]
+
+
 def test_gcs_store_metadata_never_contains_raw_text():
     """Item 4: the production store keeps raw bytes in GCS only; metadata
-    records the object generation."""
+    records the object generation; ingest is idempotent and conflicts audit."""
     from forge_common.quarantine import QuarantineConflict
 
-    db, client, store = gcs_ready()
-    record, created = store.put(
-        doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email"
-    )
-    assert created is True
+    db, client, store = gcs_workflow_ready()
+    record = ingest(db, store)
     assert "raw_text" not in record
     assert record["gcs_generation"] == 1
     assert "raw_text" not in json.dumps(store.get(DOC))
     assert INJECTION_MARKER not in json.dumps(
-        {"/".join(k): v for k, v in db.store.items()}, default=str
+        {"/".join(k): v for k, v in db.store.items() if k[0] != "quarantine"}, default=str
     )
     assert store.read_raw(DOC) == BULLETIN
-    again, created2 = store.put(
-        doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email"
-    )
-    assert created2 is False and again["sha256"] == record["sha256"]
+    assert len(quarantine_audits(db)) == 1
+    again = ingest(db, store)
+    assert again["sha256"] == record["sha256"]
+    assert len(quarantine_audits(db)) == 1  # no duplicate audit
     with pytest.raises(QuarantineConflict):
-        store.put(doc_id=DOC, workflow_id=WF, raw_text="other", source="vendor-email")
+        ingest(db, store, raw_text="other")
 
 
-def test_gcs_upload_failure_leaves_no_metadata_and_retry_succeeds():
-    """Blocker 2: object-first ordering — a failed upload writes NOTHING to
-    Firestore; the identical retry succeeds cleanly."""
-    db, client, store = gcs_ready()
+def test_gcs_upload_failure_leaves_no_state_and_retry_succeeds():
+    """Blocker: object-first ordering — a failed upload writes NOTHING
+    (no metadata, no audit); the identical retry fully succeeds."""
+    db, client, store = gcs_workflow_ready()
     client._bucket.fail_uploads = True
     with pytest.raises(ConnectionError):
-        store.put(doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email")
-    assert store.get(DOC) is None  # no stranded metadata
-    assert client._bucket.blobs == {}
+        ingest(db, store)
+    assert store.get(DOC) is None
+    assert quarantine_audits(db) == []
     client._bucket.fail_uploads = False
-    record, created = store.put(
-        doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email"
-    )
-    assert created is True and store.read_raw(DOC) == BULLETIN
+    record = ingest(db, store)
+    assert record["gcs_generation"] == 1
+    assert len(quarantine_audits(db)) == 1
 
 
-def test_gcs_orphan_object_is_repaired_by_retry():
-    """Blocker 2: crash AFTER upload, BEFORE metadata — the orphan object is
-    safe; the retry verifies its bytes and lands the metadata (created=True,
-    so the quarantine audit belongs to the completing attempt)."""
-    db, client, store = gcs_ready()
-    # Simulate the crash window: object uploaded, no metadata.
+def test_metadata_and_audit_are_atomic():
+    """FINAL BLOCKER regression: a failure between metadata creation and the
+    audit cannot strand metadata-only state — they share one transaction."""
+    db, client, store = gcs_workflow_ready()
+
+    class PoisonedTxn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def get(self, ref):
+            return self._inner.get(ref)
+
+        def set(self, ref, data, merge=False):
+            self._inner.set(ref, data, merge=merge)
+
+        def create(self, ref, data):
+            if ref.path[-2] == "audit":
+                raise RuntimeError("injected failure between metadata and audit")
+            self._inner.create(ref, data)
+
+        def commit(self):
+            self._inner.commit()
+
+    real_transaction = db.transaction
+
+    class PoisonedDb:
+        def __getattr__(self, name):
+            return getattr(db, name)
+
+        def transaction(self):
+            return PoisonedTxn(real_transaction())
+
+    with pytest.raises(RuntimeError, match="injected"):
+        ingest(PoisonedDb(), store)
+    # NOTHING survived: no metadata-only state, no audit.
+    assert store.get(DOC) is None
+    assert quarantine_audits(db) == []
+    # Identical retry on the healthy db fully repairs (object was orphaned).
+    record = ingest(db, store)
+    assert record["gcs_generation"] == 1
+    assert len(quarantine_audits(db)) == 1
+
+
+def test_gcs_orphan_object_repaired_with_exactly_one_audit():
+    """Blocker: crash AFTER upload, BEFORE the transaction — the retry
+    verifies the orphan object and lands metadata + exactly one audit."""
+    db, client, store = gcs_workflow_ready()
     client._bucket.blob(f"quarantine/{DOC}").upload_from_string(BULLETIN, if_generation_match=0)
     assert store.get(DOC) is None
-    record, created = store.put(
-        doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email"
-    )
-    assert created is True
+    record = ingest(db, store)
     assert record["gcs_generation"] == 1
+    assert len(quarantine_audits(db)) == 1
     assert store.read_raw(DOC) == BULLETIN
 
 
-def test_gcs_concurrent_different_content_single_winner():
-    """Blocker 2: generation-0 precondition gives exactly one winner; the
-    loser's differing bytes are a QuarantineConflict, and the winner's
-    object survives untouched."""
+def test_legacy_metadata_missing_audit_is_repaired():
+    """Blocker step 4: identical metadata already present WITHOUT its audit
+    (crash debris) gains exactly one audit on retry."""
+    db, client, store = gcs_workflow_ready()
+    record = store.establish_object(
+        doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email"
+    )
+    db.collection("quarantine").document(DOC).set(record)  # metadata, no audit
+    assert quarantine_audits(db) == []
+    ingest(db, store)
+    assert len(quarantine_audits(db)) == 1
+    ingest(db, store)
+    assert len(quarantine_audits(db)) == 1  # still exactly one
+
+
+def test_gcs_precondition_loser_gets_conflict():
+    """Rider rename: the generation-zero precondition yields one winner; a
+    SEQUENTIAL loser with different bytes gets QuarantineConflict and the
+    winner's object survives. (True concurrency is exercised on the real
+    emulator by the barrier tests.)"""
     from forge_common.quarantine import QuarantineConflict
 
-    db, client, store = gcs_ready()
-    store.put(doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email")
+    db, client, store = gcs_workflow_ready()
+    ingest(db, store)
     with pytest.raises(QuarantineConflict):
-        store.put(
-            doc_id=DOC,
-            workflow_id=WF,
-            raw_text=BULLETIN + "attacker-variant",
-            source="vendor-email",
-        )
+        ingest(db, store, raw_text=BULLETIN + "attacker-variant")
     assert store.read_raw(DOC) == BULLETIN
 
 
 def test_gcs_tampered_bytes_fail_screening_closed():
     """Blocker 2: modified object bytes fail the SHA check; screening fails
     closed and the failure is audited."""
-    db, client, store = gcs_ready()
-    state.create_workflow(
-        db, workflow_id=WF, equipment_id="GX12-07", trace_id=TRACE, logical_time=0
-    )
-    ingest_document(
-        db,
-        store,
-        workflow_id=WF,
-        doc_id=DOC,
-        raw_text=BULLETIN,
-        source="vendor-email",
-        trace_id=TRACE,
-    )
-    # Tamper with the stored object (same generation, different bytes).
+    db, client, store = gcs_workflow_ready()
+    ingest(db, store)
     client._bucket.blobs[f"quarantine/{DOC}"] = BULLETIN + " tampered"
     result = screen(db, store)
     assert result is None

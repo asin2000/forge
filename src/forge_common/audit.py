@@ -40,8 +40,13 @@ def build_audit_event(
     state_after: str | None = None,
     detail: str | None = None,
     work_package_id: str = "wp-none",
+    event_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build a contract-valid audit_event.v2 message (AUD-1)."""
+    """Build a contract-valid audit_event.v2 message (AUD-1).
+
+    Pass ``event_id`` when the audit must be DETERMINISTIC across retries
+    (e.g. the quarantine-ingest audit, so a retry repairs a missing audit
+    instead of duplicating it)."""
     observed = observed_at or now_iso()
     payload: dict[str, Any] = {
         "event_kind": event_kind,
@@ -56,9 +61,10 @@ def build_audit_event(
         payload["state_after"] = state_after
     if detail is not None:
         payload["detail"] = detail
-    event_id = deterministic_event_id(
-        "audit", workflow_id, reason_code, payload["input_sha256"], observed
-    )
+    if event_id is None:
+        event_id = deterministic_event_id(
+            "audit", workflow_id, reason_code, payload["input_sha256"], observed
+        )
     message = {
         "envelope": build_envelope(
             workflow_id=workflow_id,
