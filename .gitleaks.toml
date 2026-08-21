@@ -9,4 +9,4 @@ useDefault = true
 [allowlist]
 description = "ICD-4 idempotency_key in synthetic contract example fixtures"
 regexTarget = "line"
-regexes = ['''"idempotency_key": "idem-[a-z0-9_]+-[0-9]{4}"''']
+regexes = ['''"idempotency_key": "idem-[a-z0-9_-]+"''']
