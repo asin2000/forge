@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:sourcing_report.v1",
+  "title": "Parts sourcing report",
+  "description": "Supply Agent domain output: availability and shipment status of an approved part. Supply cannot approve substitutions or purchases (AGT-2). Traceability: AGT-2. All data synthetic (SUB-5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v1.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "sourcing_report.v1"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "part_number",
+        "part_approved",
+        "shipment_status",
+        "eta_days"
+      ],
+      "properties": {
+        "part_number": {
+          "type": "string",
+          "pattern": "^[A-Z0-9][A-Z0-9-]{3,31}$"
+        },
+        "part_approved": {
+          "type": "boolean",
+          "description": "True iff part_number is in the approved-parts registry."
+        },
+        "shipment_status": {
+          "enum": [
+            "not_ordered",
+            "ordered",
+            "in_transit",
+            "delayed",
+            "delivered"
+          ]
+        },
+        "eta_days": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 365,
+          "description": "Logical days until arrival from report time."
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}

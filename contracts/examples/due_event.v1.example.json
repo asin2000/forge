@@ -1,0 +1,14 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-none",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "trace-demo-spine-001",
+    "idempotency_key": "idem-due_event-0001",
+    "schema_version": "due_event.v1"
+  },
+  "payload": {
+    "due_at_logical": 10,
+    "purpose": "part_eta_reached"
+  }
+}

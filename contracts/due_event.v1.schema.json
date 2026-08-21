@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:due_event.v1",
+  "title": "Logical Clock due event",
+  "description": "Fired when the Logical Clock reaches a workflow's due_at. Processing is idempotent: double delivery produces no duplicate side effects (ORC-5, ICD-5). Traceability: ORC-5. All data synthetic (SUB-5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v1.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "due_event.v1"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "due_at_logical",
+        "purpose"
+      ],
+      "properties": {
+        "due_at_logical": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Logical Clock day at which this event fires."
+        },
+        "purpose": {
+          "enum": [
+            "part_eta_reached",
+            "review_due"
+          ]
+        }
+      }
+    }
+  }
+}

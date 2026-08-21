@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:approval_decision.v1",
+  "title": "Human approval decision",
+  "description": "Records the authenticated human decision. approver_identity derives from the authenticated principal, never client input (HUM-1). Traceability: HUM-1. All data synthetic (SUB-5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v1.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "approval_decision.v1"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id",
+        "action_type",
+        "decision",
+        "approver_identity",
+        "decided_at"
+      ],
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "pattern": "^apr-[a-z0-9-]{4,40}$"
+        },
+        "action_type": {
+          "enum": [
+            "schedule_override",
+            "substitution_approval",
+            "equipment_release"
+          ]
+        },
+        "decision": {
+          "enum": [
+            "approved",
+            "rejected"
+          ]
+        },
+        "approver_identity": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 120
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}

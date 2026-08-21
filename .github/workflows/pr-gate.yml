@@ -1,0 +1,77 @@
+# Lane 1 — PR gate (deterministic, no live model calls).
+# CI-1 lint · CI-2 contracts · ICD-3 schema immutability · CI-3 unit (seed) ·
+# DFT-1 traceability · CI-7 secrets. Lane 2 (deploy) and Lane 3 (acceptance)
+# land per FORGE-BUILD-PLAN.md Days 7 and 9.
+name: pr-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: "CI-1 lint & format (Ruff)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.lock
+      - run: ruff check .
+      - run: ruff format --check .
+
+  contracts:
+    name: "CI-2 contract gate + ICD-3 schema versions"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.lock
+      - run: python scripts/validate_contracts.py
+      - name: schema immutability vs base
+        run: |
+          BASE="origin/${{ github.base_ref || 'main' }}"
+          python scripts/check_schema_versions.py "$BASE"
+
+  unit:
+    name: "CI-3 unit gate (stubbed models)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.lock && pip install -e . --no-deps
+      - run: pytest
+
+  traceability:
+    name: "DFT-1 traceability gate"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.lock
+      - run: python scripts/check_traceability.py
+
+  secrets:
+    name: "CI-7 secrets scan (fail closed)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

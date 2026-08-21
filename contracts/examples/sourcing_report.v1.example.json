@@ -1,0 +1,17 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-sourcing-report-01",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "trace-demo-spine-001",
+    "idempotency_key": "idem-sourcing_report-0001",
+    "schema_version": "sourcing_report.v1"
+  },
+  "payload": {
+    "part_number": "HYD-ACT-4402",
+    "part_approved": true,
+    "shipment_status": "delayed",
+    "eta_days": 10,
+    "detail": "Sole approved source backordered; revised ETA 10 days."
+  }
+}

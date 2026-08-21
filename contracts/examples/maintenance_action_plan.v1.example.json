@@ -1,0 +1,40 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-maintenance-action-plan-01",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "trace-demo-spine-001",
+    "idempotency_key": "idem-maintenance_action_plan-0001",
+    "schema_version": "maintenance_action_plan.v1"
+  },
+  "payload": {
+    "plan_id": "plan-gx12-07-hyd-a",
+    "equipment_id": "GX12-07",
+    "tasks": [
+      {
+        "task_code": "TC-201",
+        "title": "Remove failed hydraulic actuator",
+        "description": "Depressurize system, remove actuator per synthetic procedure SP-HYD-020.",
+        "parts_required": [],
+        "est_hours": 3.0
+      },
+      {
+        "task_code": "TC-202",
+        "title": "Install replacement actuator",
+        "parts_required": [
+          {
+            "part_number": "HYD-ACT-4402",
+            "qty": 1
+          }
+        ],
+        "est_hours": 4.5
+      },
+      {
+        "task_code": "TC-203",
+        "title": "Operational leak and lift check",
+        "est_hours": 1.5
+      }
+    ],
+    "notes": "Requires hydraulic-qualified technicians for TC-201/TC-202."
+  }
+}

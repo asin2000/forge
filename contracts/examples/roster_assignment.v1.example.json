@@ -1,0 +1,32 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-roster-assignment-01",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "trace-demo-spine-001",
+    "idempotency_key": "idem-roster_assignment-0001",
+    "schema_version": "roster_assignment.v1"
+  },
+  "payload": {
+    "assignments": [
+      {
+        "task_code": "TC-201",
+        "technician_id": "T-0117",
+        "qualification_id": "Q-HYD-201",
+        "shift": "day"
+      },
+      {
+        "task_code": "TC-202",
+        "technician_id": "T-0117",
+        "qualification_id": "Q-HYD-202",
+        "shift": "day"
+      },
+      {
+        "task_code": "TC-203",
+        "technician_id": "T-0242",
+        "qualification_id": "Q-OPS-101",
+        "shift": "day"
+      }
+    ]
+  }
+}

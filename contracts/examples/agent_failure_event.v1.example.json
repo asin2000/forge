@@ -1,0 +1,18 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-agent-failure-event-01",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "trace-demo-spine-001",
+    "idempotency_key": "idem-agent_failure_event-0001",
+    "schema_version": "agent_failure_event.v1"
+  },
+  "payload": {
+    "role": "workforce",
+    "agent_id": "agent-workforce-01",
+    "failure_kind": "malformed_after_retries",
+    "attempts": 3,
+    "detail": "roster_assignment missing qualification_id after 2 retries.",
+    "detected_at": "2026-08-21T14:12:05Z"
+  }
+}

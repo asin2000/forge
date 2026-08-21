@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:maintenance_action_plan.v1",
+  "title": "Maintenance action plan",
+  "description": "Maintenance Agent domain output. Task codes drive Workforce qualification matching (AGT-1, AGT-3 upstream). Contains no release action. Traceability: AGT-1. All data synthetic (SUB-5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v1.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "maintenance_action_plan.v1"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan_id",
+        "equipment_id",
+        "tasks"
+      ],
+      "properties": {
+        "plan_id": {
+          "type": "string",
+          "pattern": "^plan-[a-z0-9-]{4,40}$"
+        },
+        "equipment_id": {
+          "type": "string",
+          "pattern": "^GX12-(0[1-9]|1[0-2])$"
+        },
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_code",
+              "title",
+              "est_hours"
+            ],
+            "properties": {
+              "task_code": {
+                "type": "string",
+                "pattern": "^TC-[0-9]{3}$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 200
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "parts_required": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "part_number",
+                    "qty"
+                  ],
+                  "properties": {
+                    "part_number": {
+                      "type": "string",
+                      "pattern": "^[A-Z0-9][A-Z0-9-]{3,31}$"
+                    },
+                    "qty": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 999
+                    }
+                  }
+                }
+              },
+              "est_hours": {
+                "type": "number",
+                "minimum": 0.5,
+                "maximum": 200
+              }
+            }
+          }
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    }
+  }
+}

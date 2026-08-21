@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:envelope.v1",
+  "title": "FORGE message envelope",
+  "description": "Required fields carried by every inter-agent message (ICD-4). work_package_id is 'wp-none' for workflow-scoped messages not tied to a work package.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "workflow_id",
+    "work_package_id",
+    "event_id",
+    "trace_id",
+    "idempotency_key",
+    "schema_version"
+  ],
+  "properties": {
+    "workflow_id": {
+      "type": "string",
+      "pattern": "^wf-[a-z0-9][a-z0-9-]{2,62}$"
+    },
+    "work_package_id": {
+      "type": "string",
+      "pattern": "^wp-[a-z0-9][a-z0-9-]{2,62}$"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 128
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[a-z_]+\\.v[0-9]+$"
+    }
+  }
+}

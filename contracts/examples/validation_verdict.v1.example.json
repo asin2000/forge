@@ -1,0 +1,20 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-validation-verdict-01",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "trace-demo-spine-001",
+    "idempotency_key": "idem-validation_verdict-0001",
+    "schema_version": "validation_verdict.v1"
+  },
+  "payload": {
+    "subject_event_id": "6a1f0000-0000-4000-8000-000000000021",
+    "verdict": "vetoed",
+    "rule_refs": [
+      "SP-PART-101"
+    ],
+    "reasons": [
+      "Candidate part HYD-ACT-9901X is not in the approved-parts registry."
+    ]
+  }
+}

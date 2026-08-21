@@ -1,0 +1,351 @@
+# Requirements traceability (DFT-1). CI enforces: every requirement mapped,
+# every production module referenced by at least one requirement.
+# 'pending' is permitted while strict: false; flips to strict: true on Day 7
+# (FORGE-BUILD-PLAN.md), after which pending entries fail CI.
+version: 1
+strict: false
+requirements:
+  ORC-1:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: inspection
+  ORC-2:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: inspection
+  ORC-3:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: demonstration
+  ORC-4:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  ORC-5:
+    implemented_by:
+      - contracts/state/workflow_state.v1.schema.json
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  AGT-1:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  AGT-2:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  AGT-3:
+    implemented_by:
+      - contracts/roster_assignment.v1.schema.json
+      - pending
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  AGT-4:
+    implemented_by:
+      - contracts/validation_verdict.v1.schema.json
+      - pending
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  AGT-5:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  AGT-6:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  AGT-7:
+    implemented_by:
+      - contracts/agent_failure_event.v1.schema.json
+      - pending
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  SEC-1:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  SEC-2:
+    implemented_by:
+      - contracts/quarantine_verdict.v1.schema.json
+      - pending
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  SEC-3:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  SEC-4:
+    implemented_by:
+      - contracts/quarantine_verdict.v1.schema.json
+      - pending
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  HUM-1:
+    implemented_by:
+      - contracts/approval_decision.v1.schema.json
+      - pending
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  HUM-2:
+    implemented_by:
+      - contracts/approval_request.v1.schema.json
+      - pending
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  AUD-1:
+    implemented_by:
+      - contracts/audit_event.v1.schema.json
+      - pending
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  AUD-2:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  AUD-3:
+    implemented_by:
+      - contracts/audit_event.v1.schema.json
+      - pending
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  ICD-1:
+    implemented_by:
+      - contracts/
+    verified_by:
+      - scripts/validate_contracts.py
+    verification_method: test
+  ICD-2:
+    implemented_by:
+      - src/forge_common/contracts.py
+    verified_by:
+      - tests/test_contracts.py
+    verification_method: test
+  ICD-3:
+    implemented_by:
+      - scripts/check_schema_versions.py
+    verified_by:
+      - .github/workflows/pr-gate.yml
+    verification_method: inspection
+  ICD-4:
+    implemented_by:
+      - contracts/envelope.v1.schema.json
+    verified_by:
+      - tests/test_contracts.py
+    verification_method: test
+  ICD-5:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  ICD-6:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  PLT-1:
+    implemented_by:
+      - pending
+    verified_by:
+      - scripts/smoke_vertex.py
+      - pending
+    verification_method: inspection
+  PLT-2:
+    implemented_by:
+      - pyproject.toml
+      - requirements.lock
+    verified_by:
+      - requirements.lock
+    verification_method: document
+  PLT-3:
+    implemented_by:
+      - infra/setup-gcp.sh
+      - pending
+    verified_by:
+      - pending
+    verification_method: inspection
+  PLT-4:
+    implemented_by:
+      - pending
+    verified_by:
+      - scripts/smoke_model_armor.py
+      - pending
+    verification_method: test
+  PLT-5:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: inspection
+  PLT-6:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  CI-1:
+    implemented_by:
+      - .github/workflows/pr-gate.yml
+      - pyproject.toml
+    verified_by:
+      - .github/workflows/pr-gate.yml
+    verification_method: document
+  CI-2:
+    implemented_by:
+      - .github/workflows/pr-gate.yml
+      - scripts/validate_contracts.py
+    verified_by:
+      - .github/workflows/pr-gate.yml
+    verification_method: document
+  CI-3:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  CI-4:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  CI-5:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  CI-6:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  CI-7:
+    implemented_by:
+      - .github/workflows/pr-gate.yml
+    verified_by:
+      - .github/workflows/pr-gate.yml
+    verification_method: document
+  CI-8:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: demonstration
+  DFT-1:
+    implemented_by:
+      - requirements/traceability.yaml
+      - scripts/check_traceability.py
+    verified_by:
+      - .github/workflows/pr-gate.yml
+    verification_method: document
+  DFT-2:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  DFT-3:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  DFT-4:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  DFT-5:
+    implemented_by:
+      - architecture/manifest.yaml
+    verified_by:
+      - pending
+    verification_method: document
+  SUB-1:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  SUB-2:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  SUB-3:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  SUB-4:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  SUB-5:
+    implemented_by:
+      - README.md
+    verified_by:
+      - README.md
+    verification_method: document
+  SUB-6:
+    implemented_by:
+      - docs/SUB6-authorization-request.md
+    verified_by:
+      - pending
+    verification_method: document
+  SUB-7:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document

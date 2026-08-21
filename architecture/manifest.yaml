@@ -1,0 +1,56 @@
+# Service manifest (DFT-5): each deployed service -> source modules -> diagram node.
+# CI checks this manifest against the deploy config (checker lands Day 7 per
+# FORGE-BUILD-PLAN.md). status: planned entries flip to deployed as services land.
+version: 1
+region: us-central1            # single pinned region (PLT-1)
+model: gemini-3.5-flash        # all Orchestrator/specialist reasoning (PLT-1)
+services:
+  orchestrator:
+    status: planned
+    cloud_run_service: forge-orchestrator
+    service_account: forge-orchestrator-sa
+    source: [services/orchestrator/]
+    diagram_node: orchestrator
+    requirements: [ORC-1, ORC-2, ORC-3, ORC-4, ORC-5]
+  maintenance:
+    status: planned
+    cloud_run_service: forge-maintenance
+    service_account: forge-maintenance-sa
+    source: [services/maintenance/]
+    diagram_node: maintenance
+    requirements: [AGT-1]
+  supply:
+    status: planned
+    cloud_run_service: forge-supply
+    service_account: forge-supply-sa
+    source: [services/supply/]
+    diagram_node: supply
+    requirements: [AGT-2]
+  workforce:
+    status: planned
+    cloud_run_service: forge-workforce
+    service_account: forge-workforce-sa
+    source: [services/workforce/]
+    diagram_node: workforce
+    requirements: [AGT-3]
+  safety:
+    status: planned
+    cloud_run_service: forge-safety
+    service_account: forge-safety-sa
+    source: [services/safety/]
+    diagram_node: safety
+    requirements: [AGT-4]
+  cyber_trust:
+    status: planned
+    cloud_run_service: forge-cyber-trust
+    service_account: forge-cyber-trust-sa
+    source: [services/cyber_trust/]
+    diagram_node: cyber_trust
+    requirements: [AGT-5, SEC-1, SEC-2, SEC-3, SEC-4]
+shared:
+  contracts: {source: [contracts/], requirements: [ICD-1, ICD-2, ICD-3, ICD-4]}
+  forge_common: {source: [src/forge_common/], requirements: [ICD-2]}
+infrastructure:
+  firestore: {purpose: "workflow state, inbox/outbox, audit, Logical Clock", requirements: [ORC-5, AUD-2, ICD-5]}
+  pubsub: {purpose: "agent bus with per-workflow ordering keys + DLQ", requirements: [ICD-5]}
+  model_armor: {purpose: "SEC screening", requirements: [PLT-4, SEC-1]}

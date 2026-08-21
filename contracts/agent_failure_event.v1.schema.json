@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:agent_failure_event.v1",
+  "title": "Specialist failure event",
+  "description": "Emitted when a specialist times out, exhausts output retries, or violates a contract; consumed by the Orchestrator monitor (ORC-4, AGT-7). Traceability: ORC-4, AGT-7. All data synthetic (SUB-5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v1.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "agent_failure_event.v1"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "agent_id",
+        "failure_kind",
+        "attempts",
+        "detected_at"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "maintenance",
+            "supply",
+            "workforce",
+            "safety",
+            "cyber_trust"
+          ]
+        },
+        "agent_id": {
+          "type": "string",
+          "pattern": "^agent-[a-z_]+-[0-9]{2}$"
+        },
+        "failure_kind": {
+          "enum": [
+            "timeout",
+            "malformed_after_retries",
+            "contract_violation"
+          ]
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "detected_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

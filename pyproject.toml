@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "forge"
+version = "0.1.0"
+description = "FORGE — Fleet Operational Readiness & Governed Execution (All Things Agentic Hackathon entry; all data synthetic)"
+requires-python = ">=3.11"
+dependencies = [
+    "google-adk",
+    "jsonschema[format]>=4.21",
+    "referencing>=0.34",
+    "pyyaml>=6.0",
+]
+# Exact pins live in requirements.lock (PLT-2). Regenerate with:
+#   pip install -e ".[dev]" && pip freeze --exclude-editable > requirements.lock
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+    "vulture>=2.10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/forge_common"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.vulture]
+paths = ["src", "services", "scripts"]
+min_confidence = 90
