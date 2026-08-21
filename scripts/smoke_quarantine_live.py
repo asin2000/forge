@@ -33,10 +33,12 @@ from services.cyber_trust.handlers import (  # noqa: E402
     _classifier_validator,
     _neutralize_markers,
     bounded_parse,
+    ingest_document,  # noqa: E402
 )
 from services.cyber_trust.model_armor import ModelArmorScreen  # noqa: E402
 
 from forge_common.agent_base import AdkTextRunner, constrained_json, load_prompt  # noqa: E402
+from forge_common.messages import deterministic_trace_id  # noqa: E402
 from forge_common.quarantine import GcsQuarantineStore  # noqa: E402
 
 bulletin = (
@@ -46,21 +48,30 @@ bulletin = (
 # 1. GCS round-trip with a FRESH doc id: proves generation capture and the
 # generation-pinned read, not just adoption of an old object.
 doc_id = f"smoke-vsb-{uuid.uuid4().hex[:10]}"
+wf_id = "wf-smoke-quarantine-001"
 db = firestore.Client(project=PROJECT)
 store = GcsQuarantineStore(db, bucket=f"forge-quarantine-{PROJECT}")
-record = store.establish_object(
+# The PRODUCTION ingestion path — atomic metadata + DOCUMENT_QUARANTINED
+# audit. No direct metadata writes: the smoke must not create the
+# metadata-without-audit state the production fix prohibits.
+record = ingest_document(
+    db,
+    store,
+    workflow_id=wf_id,
     doc_id=doc_id,
-    workflow_id="wf-smoke-quarantine-001",
     raw_text=bulletin,
     source="live-smoke",
+    trace_id=deterministic_trace_id(wf_id),
 )
 assert record["gcs_generation"], "object generation must be captured"
-db.collection("quarantine").document(doc_id).set(record)  # component smoke: metadata direct
 assert "raw_text" not in json.dumps(store.get(doc_id))
 assert "SYSTEM OVERRIDE" in store.read_raw(doc_id)  # generation-pinned + SHA-verified
+audit_docs = list(db.collection("workflows").document(wf_id).collection("audit").stream())
+assert any(d.to_dict()["payload"]["reason_code"] == "DOCUMENT_QUARANTINED" for d in audit_docs)
 print(
-    f"GCS ROUND-TRIP: PASS — fresh object {record['quarantine_uri']} "
-    f"generation={record['gcs_generation']}, metadata raw-free, read generation-pinned"
+    f"GCS INGEST (atomic): PASS — fresh object {record['quarantine_uri']} "
+    f"generation={record['gcs_generation']}, metadata raw-free + audited, "
+    f"read generation-pinned"
 )
 
 # 2. Model Armor via ADC.
@@ -98,3 +109,10 @@ print(
     "QUARANTINE LIVE COMPONENT SMOKE: PASS — armor catches the probe; "
     "the classifier catches the dilution (end-to-end pipeline = Lane 2)"
 )
+
+# Cleanup: the smoke leaves no records behind (metadata, audits, object).
+db.collection("quarantine").document(doc_id).delete()
+for snapshot in db.collection("workflows").document(wf_id).collection("audit").stream():
+    snapshot.reference.delete()
+store._bucket.blob(f"quarantine/{doc_id}").delete()
+print("CLEANUP: smoke records removed")

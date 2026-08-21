@@ -348,3 +348,19 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   concurrency lives in the emulator barrier tests); the live component
   smoke uses a FRESH doc id and asserts the captured GCS generation with a
   generation-pinned read (re-captured).
+
+## 2026-08-21 (build-day 5) — Conflict-audit boundary (PR #15 regression)
+
+- Moving establish_object ahead of the try/except in the atomic-ingest
+  rework silently de-audited the GCS object-byte-mismatch conflict. Both
+  conflict locations (object bytes at establish; workflow/source in the
+  transaction) now route through one _audit_reingest_conflict helper;
+  the precondition-loser test asserts exactly one REINGEST_CONFLICT audit.
+- Smoke hygiene: the live component smoke ingests via the PRODUCTION
+  atomic path (no direct metadata writes — the smoke must not create the
+  metadata-without-audit state the fix prohibits), asserts the
+  DOCUMENT_QUARANTINED audit, and deletes its own records; earlier smoke
+  debris (3 unaudited records + objects) purged from the live project.
+- Honest-scope fix: removed the claim that emulator barrier tests cover
+  GCS ingestion concurrency — the GCS conflict test is correctly
+  sequential (precondition loser).
