@@ -1309,3 +1309,78 @@ def test_day5_scene1_quarantine_pipeline_real_client(db):
     assert store.get(doc2)["status"] == "QUARANTINED"
     reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, wf)]
     assert "SCREENING_FAILED" in reasons
+
+
+def test_quarantine_ingest_atomicity_and_recovery_real_client(db):
+    """Final blocker on REAL Firestore: metadata + DOCUMENT_QUARANTINED
+    audit commit atomically; orphan-object and missing-audit states are
+    repaired by identical retry with exactly one audit, and a completed
+    ingest never duplicates it."""
+    from pathlib import Path as _Path
+
+    from services.cyber_trust.handlers import ingest_document
+
+    from forge_common.quarantine import FirestoreQuarantineStore
+
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    store = FirestoreQuarantineStore(db, bucket="forge-quarantine-demo")
+    bulletin = (
+        _Path(__file__).resolve().parents[2] / "data" / "vendor_bulletin_vnd_act_9901.txt"
+    ).read_text()
+    doc_id = f"vsb-atomic-{wf.removeprefix('wf-')}"
+
+    def quarantine_audits():
+        return [
+            e
+            for e in state.reconstruct_audit_trail(db, wf)
+            if e["payload"]["reason_code"] == "DOCUMENT_QUARANTINED"
+        ]
+
+    # (a) legacy/crash-debris state: identical metadata present WITHOUT its
+    # audit — the retry repairs it with exactly one audit, atomically.
+    record = store.establish_object(
+        doc_id=doc_id, workflow_id=wf, raw_text=bulletin, source="vendor-email"
+    )
+    db.collection("quarantine").document(doc_id).set(record)
+    assert quarantine_audits() == []
+    stored = ingest_document(
+        db,
+        store,
+        workflow_id=wf,
+        doc_id=doc_id,
+        raw_text=bulletin,
+        source="vendor-email",
+        trace_id=trace,
+    )
+    assert stored["sha256"] == record["sha256"]
+    assert len(quarantine_audits()) == 1
+
+    # (b) identical retry after COMPLETE ingestion: no duplicate audit.
+    ingest_document(
+        db,
+        store,
+        workflow_id=wf,
+        doc_id=doc_id,
+        raw_text=bulletin,
+        source="vendor-email",
+        trace_id=trace,
+    )
+    assert len(quarantine_audits()) == 1
+
+    # (c) fresh ingest on the real client: metadata + audit land together.
+    doc2 = f"vsb-atomic2-{wf.removeprefix('wf-')}"
+    ingest_document(
+        db,
+        store,
+        workflow_id=wf,
+        doc_id=doc2,
+        raw_text=bulletin,
+        source="vendor-email",
+        trace_id=trace,
+    )
+    assert store.get(doc2)["status"] == "QUARANTINED"
+    assert len(quarantine_audits()) == 2  # one per document, exactly

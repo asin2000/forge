@@ -18,6 +18,7 @@ Usage: PROJECT_ID=<id> python scripts/smoke_quarantine_live.py
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 
 PROJECT = os.environ["PROJECT_ID"]
@@ -42,18 +43,25 @@ bulletin = (
     Path(__file__).resolve().parents[1] / "data" / "vendor_bulletin_vnd_act_9901.txt"
 ).read_text()
 
-# 1. GCS round-trip.
+# 1. GCS round-trip with a FRESH doc id: proves generation capture and the
+# generation-pinned read, not just adoption of an old object.
+doc_id = f"smoke-vsb-{uuid.uuid4().hex[:10]}"
 db = firestore.Client(project=PROJECT)
 store = GcsQuarantineStore(db, bucket=f"forge-quarantine-{PROJECT}")
-record, created = store.put(
-    doc_id="smoke-vsb-001",
+record = store.establish_object(
+    doc_id=doc_id,
     workflow_id="wf-smoke-quarantine-001",
     raw_text=bulletin,
     source="live-smoke",
 )
-assert "raw_text" not in json.dumps(store.get("smoke-vsb-001"))
-assert "SYSTEM OVERRIDE" in store.read_raw("smoke-vsb-001")
-print(f"GCS ROUND-TRIP: PASS — object at {record['quarantine_uri']}, metadata raw-free")
+assert record["gcs_generation"], "object generation must be captured"
+db.collection("quarantine").document(doc_id).set(record)  # component smoke: metadata direct
+assert "raw_text" not in json.dumps(store.get(doc_id))
+assert "SYSTEM OVERRIDE" in store.read_raw(doc_id)  # generation-pinned + SHA-verified
+print(
+    f"GCS ROUND-TRIP: PASS — fresh object {record['quarantine_uri']} "
+    f"generation={record['gcs_generation']}, metadata raw-free, read generation-pinned"
+)
 
 # 2. Model Armor via ADC.
 armor = ModelArmorScreen(project_id=PROJECT)

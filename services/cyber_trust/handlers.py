@@ -267,15 +267,49 @@ def ingest_document(
     """SEC-1: the external document enters quarantine FIRST, audited. The
     raw text goes nowhere else.
 
-    Identical re-ingest is idempotent (returns the STORED record, no
-    duplicate audit); a doc_id reused with different bytes, workflow, or
-    source is REJECTED with an audited REINGEST_CONFLICT — one document ID
-    can never audit one document while screening another.
+    Safe ordering (AUD-2 at the quarantine boundary):
+    1. establish/verify the raw object (GCS, generation-zero precondition —
+       an orphan object after a later failure is safe and retryable);
+    2. build the stable metadata and a DETERMINISTIC audit identity;
+    3. commit metadata + DOCUMENT_QUARANTINED audit in ONE Firestore
+       transaction — no metadata-only window can exist;
+    4. an identical retry validates existing metadata and repairs a missing
+       audit (legacy or crash debris) without ever duplicating one.
+    A doc_id reused with different bytes/workflow/source raises
+    QuarantineConflict with an audited REINGEST_CONFLICT.
     """
+    record = store.establish_object(
+        doc_id=doc_id, workflow_id=workflow_id, raw_text=raw_text, source=source
+    )
+    audit = build_audit_event(
+        workflow_id=workflow_id,
+        trace_id=trace_id,
+        agent_identity=CYBER_TRUST_AGENT,
+        event_kind="quarantine",
+        reason_code="DOCUMENT_QUARANTINED",
+        input_obj={"doc_id": doc_id, "source": source, "sha256": record["sha256"]},
+        output_obj={"quarantine_uri": record["quarantine_uri"]},
+        effective_at=read_clock(db),
+        # Deterministic: identical retries collide on the same audit doc —
+        # repair-not-duplicate semantics.
+        event_id=deterministic_event_id("quarantine-ingest", workflow_id, doc_id, record["sha256"]),
+    )
+
+    def _ingest(txn: Any) -> dict[str, Any]:
+        # ALL reads first (real-client transaction rule).
+        existing = layout.txn_get_dict(txn, quarantine_ref(db, doc_id))
+        audit_ref = layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"])
+        audit_exists = layout.txn_get_dict(txn, audit_ref)
+        stored = store.validate_existing(record, existing)  # raises on conflict
+        if stored is None:
+            txn.create(quarantine_ref(db, doc_id), record)
+            stored = record
+        if not audit_exists:
+            txn.create(audit_ref, audit)  # fresh ingest OR audit repair
+        return stored
+
     try:
-        record, created = store.put(
-            doc_id=doc_id, workflow_id=workflow_id, raw_text=raw_text, source=source
-        )
+        return layout.run_in_transaction(db, _ingest)
     except QuarantineConflict as exc:
         conflict_audit = build_audit_event(
             workflow_id=workflow_id,
@@ -295,23 +329,3 @@ def ingest_document(
 
         layout.run_in_transaction(db, _conflict)
         raise
-    if not created:
-        return record  # idempotent re-ingest: already audited on first entry
-    audit = build_audit_event(
-        workflow_id=workflow_id,
-        trace_id=trace_id,
-        agent_identity=CYBER_TRUST_AGENT,
-        event_kind="quarantine",
-        reason_code="DOCUMENT_QUARANTINED",
-        input_obj={"doc_id": doc_id, "source": source, "sha256": record["sha256"]},
-        output_obj={"quarantine_uri": record["quarantine_uri"]},
-        effective_at=read_clock(db),
-    )
-
-    def _audit(txn: Any) -> None:
-        ref = layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"])
-        if not layout.txn_get_dict(txn, ref):
-            txn.create(ref, audit)
-
-    layout.run_in_transaction(db, _audit)
-    return record

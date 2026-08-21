@@ -330,3 +330,21 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   smoke is labeled a COMPONENT smoke (end-to-end = Lane 2); decision-log
   headers carry merge date + build-day label (everything so far merged
   2026-08-21).
+
+## 2026-08-21 (build-day 5) — Atomic quarantine ingest (final blocker)
+
+- **Metadata + DOCUMENT_QUARANTINED audit commit in ONE transaction.**
+  Stores now only ESTABLISH the raw object (GCS: generation-zero
+  precondition; emulator store: embeds bytes in the record) and commit
+  nothing; ingest_document owns the single transaction that
+  creates-or-validates metadata AND creates the audit. The audit's event ID
+  is DETERMINISTIC in (workflow, doc, sha), so an identical retry repairs a
+  missing audit (orphan object, legacy metadata-without-audit, crash
+  debris) without ever duplicating one — no metadata-only window can exist
+  (AUD-2 holds at the quarantine boundary). Fault-injection, orphan-repair,
+  legacy-repair, and no-duplicate regressions on the fake; the
+  repair/recovery matrix also runs on the REAL Firestore emulator.
+- Riders: the sequential race test is renamed precondition-loser (true
+  concurrency lives in the emulator barrier tests); the live component
+  smoke uses a FRESH doc id and asserts the captured GCS generation with a
+  generation-pinned read (re-captured).
