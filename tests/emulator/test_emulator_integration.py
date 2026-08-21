@@ -435,6 +435,16 @@ def test_day3_exit_assign_and_produce_real_client(db):
         validate_message(message)
 
 
+def reset_workforce_instances(db):
+    """Emulator DB persists across tests (as production deliberately does
+    across redeploys): pin the workforce instances back to their seeded
+    states so repair-loop tests are order-independent."""
+    from forge_common import registry
+
+    registry.instance_ref(db, "agent-workforce-01").set({"state": "IDLE"}, merge=True)
+    registry.instance_ref(db, "agent-workforce-02").set({"state": "RESERVE"}, merge=True)
+
+
 def test_reg2_race_rejected_on_real_client(db):
     """Rider 1: the negative REG-2 race on REAL Firestore — a definition
     retired between discovery and commit is refused, audited, and the
@@ -482,6 +492,7 @@ def test_day4_exit_repair_loop_real_client(db):
     from forge_common import layout, registry
 
     registry.load_registry(db)
+    reset_workforce_instances(db)
     wf = unique_wf()
     trace = deterministic_trace_id(wf)
     state.create_workflow(
@@ -526,3 +537,150 @@ def test_day4_exit_repair_loop_real_client(db):
     assert wp["assignment_seq"] == 2
     kinds = [e["payload"]["event_kind"] for e in state.reconstruct_audit_trail(db, wf)]
     assert kinds.count("reassignment") == 1
+
+
+def test_day4_closeout_full_flow_real_client(db):
+    """Entrant closeout on REAL Firestore: completion beats the monitor,
+    Workforce is created by the real plan flow, reassignment preserves
+    inputs, and a distinct stale failure is a total no-op."""
+    from services.maintenance.handlers import make_handler as make_maintenance
+    from services.orchestrator.handlers import (
+        make_failure_handler,
+        make_nmc_handler,
+        make_plan_handler,
+    )
+    from services.orchestrator.monitor import run_monitoring_cycle
+
+    from adk_stub import stub_json
+    from forge_common import registry
+
+    registry.load_registry(db)
+    reset_workforce_instances(db)
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    workflow_ref = db.collection("workflows").document(wf)
+
+    def wp(role):
+        return (
+            workflow_ref.collection("work_packages")
+            .document(f"wp-{role}-{wf.removeprefix('wf-')}")
+            .get()
+            .to_dict()
+        )
+
+    def outbox():
+        return [d.to_dict()["message"] for d in workflow_ref.collection("outbox").stream()]
+
+    # 1) NMC -> assignments via the real orchestrator flow.
+    nmc = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            schema_version="nmc_event.v2",
+            event_id=deterministic_event_id("nmc", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-nmc-{wf}",
+        ),
+        "payload": {
+            "equipment_id": "GX12-07",
+            "discrepancy_code": "DSC-0042",
+            "description": "Failed hydraulic actuator on lift assembly",
+            "reported_at": "2026-08-21T09:00:00Z",
+        },
+    }
+    orchestrator = make_nmc_handler(
+        db,
+        model=stub_json(
+            {
+                "objectives": {
+                    "maintenance": "Plan replacement of the failed actuator.",
+                    "supply": "Source the approved actuator and report status.",
+                }
+            }
+        ),
+    )
+    assert process_message(db, nmc, orchestrator, consumer_identity="forge-orchestrator")
+
+    # 2) Maintenance completes: package flips COMPLETED atomically and the
+    #    monitor cannot falsely time it out (gap 1).
+    maintenance_asn = next(m for m in outbox() if m["payload"].get("role") == "maintenance")
+    plan_payload = {
+        "plan_id": "plan-emu-04",
+        "equipment_id": "GX12-07",
+        "tasks": [{"task_code": "TC-101", "title": "Replace actuator", "est_hours": 6.5}],
+    }
+    assert process_message(
+        db,
+        maintenance_asn,
+        make_maintenance(db, stub_json(plan_payload)),
+        consumer_identity="forge-maintenance",
+    )
+    assert wp("maintenance")["status"] == "COMPLETED"
+    ref = workflow_ref.collection("work_packages").document(
+        f"wp-maintenance-{wf.removeprefix('wf-')}"
+    )
+    ref.set({**ref.get().to_dict(), "assigned_observed_at": "2026-08-21T00:00:00.000000Z"})
+    assert (
+        run_monitoring_cycle(db, trace_id_for=lambda w: trace, now="2026-08-21T09:00:00.000000Z")
+        == []
+    )
+
+    # 3) The REAL plan flow creates the Workforce package (gap 2), inputs
+    #    carried (gap 3 precondition).
+    plan_message = next(
+        m for m in outbox() if m["envelope"]["schema_version"] == "maintenance_action_plan.v2"
+    )
+    assert process_message(
+        db, plan_message, make_plan_handler(db), consumer_identity="forge-orchestrator"
+    )
+    workforce_wp = wp("workforce")
+    assert workforce_wp["owner_instance_id"] == "agent-workforce-01"
+    assert workforce_wp["inputs"]["task_codes"] == ["TC-101"]
+
+    # 4) Timeout -> repair; the reserve's assignment preserves inputs (gap 3).
+    wref = workflow_ref.collection("work_packages").document(
+        f"wp-workforce-{wf.removeprefix('wf-')}"
+    )
+    wref.set({**wref.get().to_dict(), "assigned_observed_at": "2026-08-21T00:00:00.000000Z"})
+    flagged = run_monitoring_cycle(
+        db, trace_id_for=lambda w: trace, now="2026-08-21T09:00:00.000000Z"
+    )
+    assert f"wp-workforce-{wf.removeprefix('wf-')}" in flagged
+    timeout_event = next(
+        m for m in outbox() if m["envelope"]["schema_version"] == "agent_failure_event.v2"
+    )
+    handler = make_failure_handler(db)
+    assert process_message(db, timeout_event, handler, consumer_identity="forge-orchestrator")
+    reassignment = next(m for m in outbox() if m["payload"].get("reassigned_from"))
+    assert reassignment["payload"]["assigned_agent_id"] == "agent-workforce-02"
+    assert reassignment["payload"]["inputs"]["task_codes"] == ["TC-101"]
+
+    # 5) A DISTINCT stale failure for the old owner: total no-op (gap 4).
+    status_before = workflow_ref.get().to_dict()["status"]
+    trail_before = len(state.reconstruct_audit_trail(db, wf))
+    outbox_before = len(outbox())
+    stale = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            work_package_id=f"wp-workforce-{wf.removeprefix('wf-')}",
+            schema_version="agent_failure_event.v2",
+            event_id=deterministic_event_id("stale-fail", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-stale-fail-{wf}",
+        ),
+        "payload": {
+            "role": "workforce",
+            "agent_id": "agent-workforce-01",
+            "failure_kind": "timeout",
+            "attempts": 1,
+            "detail": "stale duplicate detection",
+            "detected_at": "2026-08-21T10:00:00Z",
+        },
+    }
+    assert process_message(db, stale, handler, consumer_identity="forge-orchestrator")
+    assert workflow_ref.get().to_dict()["status"] == status_before
+    assert len(state.reconstruct_audit_trail(db, wf)) == trail_before
+    assert len(outbox()) == outbox_before
+    assert wp("workforce")["owner_instance_id"] == "agent-workforce-02"

@@ -1,11 +1,12 @@
-"""Safety & Policy Agent (AGT-4): validates proposed actions against the
-synthetic procedures library. A veto is not human-overridable.
+"""Safety & Policy Agent (AGT-4): validates EVERY proposed action against
+the synthetic procedures library — maintenance plans, sourcing reports, and
+roster assignments. A veto is not human-overridable.
 
-The verdict is DATA-BACKED: the compliance engine
-(:func:`synthetic_data.plan_violations`) computes violations from the
-procedures library and approved-parts registry; the model drafts the
-verdict message, and the payload_check refuses any verdict that contradicts
-the computed violations (wrong verdict, or missing violated rule_refs).
+The verdict is DATA-BACKED: the compliance engine (plan_violations /
+sourcing_violations / roster_violations) computes violations from the
+procedures library, approved-parts registry, and qualification records; the
+model drafts the verdict message, and the payload_check refuses any verdict
+that contradicts the computed violations.
 """
 
 from __future__ import annotations
@@ -25,13 +26,24 @@ PROMPT_FILE = "safety_validation.v1.md"
 OUTPUT_SCHEMA = "validation_verdict.v2"
 
 
-def make_plan_validation_handler(db: Any, model: Any):
-    """Bus handler consuming maintenance_action_plan.v2 (fan-out subscriber)."""
+#: schema_version -> compliance engine (AGT-4: every proposed action).
+VALIDATORS = {
+    "maintenance_action_plan.v2": synthetic_data.plan_violations,
+    "sourcing_report.v2": synthetic_data.sourcing_violations,
+    "roster_assignment.v2": synthetic_data.roster_violations,
+}
+
+
+def make_validation_handler(db: Any, model: Any):
+    """Bus handler validating every proposed action (fan-out subscriber)."""
 
     def handle(message: dict[str, Any], writes: TxnWrites) -> None:
         envelope = message["envelope"]
+        engine = VALIDATORS.get(envelope["schema_version"])
+        if engine is None:
+            return  # not a proposed action; consumption recorded, no verdict
         plan = message["payload"]
-        violations = synthetic_data.plan_violations(plan)
+        violations = engine(plan)
 
         def check(payload: dict[str, Any]) -> list[str]:
             expected = "vetoed" if violations else "approved"
@@ -77,7 +89,7 @@ def make_plan_validation_handler(db: Any, model: Any):
                 reason_code=(
                     "SPECIALIST_MALFORMED"
                     if failed
-                    else ("PLAN_VETOED" if vetoed else "PLAN_APPROVED")
+                    else ("ACTION_VETOED" if vetoed else "ACTION_APPROVED")
                 ),
                 input_obj=plan,
                 output_obj=result["payload"],
@@ -87,3 +99,7 @@ def make_plan_validation_handler(db: Any, model: Any):
         )
 
     return handle
+
+
+# Backward-compatible alias (Day 4 tests): plans are one of the validated kinds.
+make_plan_validation_handler = make_validation_handler

@@ -1,14 +1,24 @@
-# Synthetic approved-parts registry (SUB-5: all data synthetic).
-# Source of truth for AGT-2 (Supply may not approve substitutions) and
-# AGT-4/SEC-4 (Safety rejects identifiers not in this registry).
-# The spine's vendor substitute VND-ACT-9901 is deliberately ABSENT.
+# Synthetic approved-parts registry + supply-chain facts (SUB-5: synthetic).
+# Source of truth for AGT-2 (Supply may not approve substitutions; approval
+# is DISCREPANCY-SPECIFIC via applicable_discrepancies) and AGT-4/SEC-4
+# (Safety rejects identifiers not in this registry). shipment_status and
+# eta_days are the synthetic supply-chain state — Supply reports them
+# verbatim, never invents them. The spine's vendor substitute VND-ACT-9901
+# is deliberately ABSENT; HYD-ACT-4402's 21-day delay is the spine's Scene
+# 3/4 driver.
 parts:
   - part_number: HYD-ACT-4402
     description: Hydraulic actuator, GX-12 lift assembly
     applicable_discrepancies: [DSC-0042]
+    shipment_status: delayed
+    eta_days: 21
   - part_number: HYD-SEAL-1108
     description: Actuator seal kit
     applicable_discrepancies: [DSC-0042, DSC-0107]
+    shipment_status: in_transit
+    eta_days: 3
   - part_number: ELEC-HARN-2210
     description: Boom electrical harness
     applicable_discrepancies: [DSC-0311]
+    shipment_status: ordered
+    eta_days: 7
