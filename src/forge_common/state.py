@@ -74,6 +74,10 @@ def record_approval_decision(db: Any, message: dict[str, Any]) -> str:
     workflow_id = message["envelope"]["workflow_id"]
 
     def _record(txn: Any) -> None:
+        # Leading read: see create_workflow — write-only transactions never
+        # begin on the real client. Also an explicit duplicate check.
+        if layout.txn_get_dict(txn, layout.approval_ref(db, workflow_id, payload["approval_id"])):
+            raise GateBlocked(f"approval {payload['approval_id']} already recorded (HUM-1)")
         txn.create(
             layout.approval_ref(db, workflow_id, payload["approval_id"]),
             {"message": message, "recorded_observed_at": now_iso()},
@@ -231,6 +235,11 @@ def create_workflow(
     """Create the workflow state document in INTAKE, audited (ORC-5, AUD-1)."""
 
     def _create(txn: Any) -> dict[str, Any]:
+        # Leading read: real transactions begin lazily on the first read —
+        # a write-only transaction never acquires an ID and cannot commit.
+        # Doubles as an explicit existence check.
+        if layout.txn_get_dict(txn, layout.workflow_ref(db, workflow_id)):
+            raise InvalidTransition(f"workflow {workflow_id} already exists")
         doc = layout.validate_state_doc(
             {
                 "workflow_id": workflow_id,

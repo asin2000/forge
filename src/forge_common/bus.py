@@ -102,7 +102,10 @@ def _audit_rejection(
     )
 
     def _write(txn: Any) -> None:
-        txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
+        ref = layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"])
+        if layout.txn_get_dict(txn, ref):  # leading read: lazy-begin + idempotent
+            return
+        txn.create(ref, audit)
 
     layout.run_in_transaction(db, _write)
 
