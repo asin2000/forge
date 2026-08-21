@@ -345,7 +345,17 @@ def check_failure_disposition(
         wp.get("status") == "COMPLETED" or wp.get("owner_instance_id") != failed_instance_id
     ):
         return {"skip": True}
-    return {"skip": False, "work_package": wp}
+    workflow = layout.txn_get_dict(txn, layout.workflow_ref(db, workflow_id))
+    return {
+        "skip": False,
+        "work_package": wp,
+        # A second specialist failure in an already-blocked workflow must
+        # not re-transition (BLOCKED -> BLOCKED is illegal and would NACK
+        # forever): the redundant transition is skipped while the second
+        # package/instance are still marked FAILED and audited.
+        "workflow_already_blocked": bool(workflow)
+        and workflow.get("status") == "BLOCKED_AGENT_FAILURE",
+    }
 
 
 def apply_failure_disposition(

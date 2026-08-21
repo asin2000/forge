@@ -333,9 +333,13 @@ def process_message(
                 disposition_plan = registry.check_failure_disposition(
                     txn, db, workflow_id=workflow_id, **writes.failure_disposition
                 )
-                if not disposition_plan["skip"]:
+                if not disposition_plan["skip"] and not disposition_plan.get(
+                    "workflow_already_blocked"
+                ):
                     # The disposition's workflow block applies here, before
-                    # any other write, preserving reads-before-writes.
+                    # any other write, preserving reads-before-writes. An
+                    # already-blocked workflow skips the redundant (illegal)
+                    # transition but still gets the FAILED marks + audit.
                     state.apply_transition(
                         txn,
                         db,

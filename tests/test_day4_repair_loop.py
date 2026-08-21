@@ -903,3 +903,93 @@ def test_safety_roster_verdicts():
         and m["payload"]["verdict"] == "approved"
     ]
     assert len(approved) == 1
+
+
+def test_second_failure_in_blocked_workflow_no_nack_loop():
+    """Round-3 item 2 (fake): a second non-Workforce failure in an already
+    BLOCKED workflow consumes cleanly — package+instance FAILED and audited,
+    no illegal BLOCKED->BLOCKED transition, no redelivery loop."""
+    db = ready_db()
+    claim_package(db, "supply")
+    claim_package(db, "maintenance")
+    handler = make_failure_handler(db)
+    assert process_message(
+        db,
+        failure_message("supply", "agent-supply-01"),
+        handler,
+        consumer_identity="forge-orchestrator",
+    )
+    assert (
+        db.collection("workflows").document(WF).get().to_dict()["status"] == "BLOCKED_AGENT_FAILURE"
+    )
+    # Second, distinct failure for a different role — previously an
+    # InvalidTransition NACK loop.
+    assert process_message(
+        db,
+        failure_message("maintenance", "agent-maintenance-01"),
+        handler,
+        consumer_identity="forge-orchestrator",
+    )
+    assert wp_doc(db, "maintenance")["status"] == "FAILED"
+    assert registry.instance_ref(db, "agent-maintenance-01").get().to_dict()["state"] == "FAILED"
+    escalations = [
+        e
+        for e in state.reconstruct_audit_trail(db, WF)
+        if e["payload"]["event_kind"] == "escalation"
+        and e["payload"]["reason_code"] == "SPECIALIST_FAILURE_NO_RESERVE"
+    ]
+    assert len(escalations) == 2  # one per failed specialist
+    states = [
+        e["payload"].get("state_after")
+        for e in state.reconstruct_audit_trail(db, WF)
+        if "state_after" in e["payload"]
+    ]
+    assert states.count("BLOCKED_AGENT_FAILURE") == 1  # transitioned exactly once
+
+
+def test_reserve_unavailable_raced_completion_no_block():
+    """Round-3 item 3 (fake): Workforce completes between the no-reserve
+    pre-read and commit — the disposition consumes with zero effects."""
+    db = ready_db()
+    claim_package(db, "workforce", inputs={**NMC_INPUTS, "task_codes": ["TC-101"]})
+    # Exhaust the reserve so the RESERVE_UNAVAILABLE branch runs.
+    registry.instance_ref(db, "agent-workforce-02").set({"state": "ACTIVE"}, merge=True)
+    inner = make_failure_handler(db)
+
+    def raced(msg, writes):
+        inner(msg, writes)
+        ref = (
+            db.collection("workflows")
+            .document(WF)
+            .collection("work_packages")
+            .document(f"wp-workforce-{WF.removeprefix('wf-')}")
+        )
+        ref.set({**ref.get().to_dict(), "status": "COMPLETED"})
+
+    trail_before = len(state.reconstruct_audit_trail(db, WF))
+    assert process_message(
+        db,
+        failure_message("workforce", "agent-workforce-01"),
+        raced,
+        consumer_identity="forge-orchestrator",
+    )
+    assert db.collection("workflows").document(WF).get().to_dict()["status"] == "INTAKE"
+    assert len(state.reconstruct_audit_trail(db, WF)) == trail_before
+    assert wp_doc(db)["status"] == "COMPLETED"
+    assert registry.instance_ref(db, "agent-workforce-01").get().to_dict()["state"] != "FAILED"
+    # Genuine no-reserve failure still blocks with the escalation.
+    db2 = ready_db()
+    claim_package(db2, "workforce", inputs={**NMC_INPUTS, "task_codes": ["TC-101"]})
+    registry.instance_ref(db2, "agent-workforce-02").set({"state": "ACTIVE"}, merge=True)
+    assert process_message(
+        db2,
+        failure_message("workforce", "agent-workforce-01"),
+        make_failure_handler(db2),
+        consumer_identity="forge-orchestrator",
+    )
+    assert (
+        db2.collection("workflows").document(WF).get().to_dict()["status"]
+        == "BLOCKED_AGENT_FAILURE"
+    )
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db2, WF)]
+    assert "RESERVE_UNAVAILABLE" in reasons

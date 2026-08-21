@@ -23,6 +23,7 @@ and audited, never coerced.
 | work_package_assignment.v1 | Orchestrator → specialist | ORC-1, ORC-3 |
 | maintenance_action_plan.v1 | Maintenance → Orchestrator | AGT-1 |
 | sourcing_report.v1 | Supply → Orchestrator | AGT-2 |
+| sourcing_report.v3 | Supply → Orchestrator (ACTIVE; v2 description superseded — approval is discrepancy-specific) | AGT-2 |
 | roster_assignment.v1 | Workforce → Orchestrator | AGT-3 |
 | validation_verdict.v1 | Safety → Orchestrator | AGT-4 |
 | quarantine_verdict.v1 | Cyber Trust → bus | SEC-1..4, AGT-5 |
@@ -37,3 +38,11 @@ document (ORC-5) — deliberately not registered as a bus message type.
 
 `examples/` holds at least one valid instance per schema; CI-2 validates all
 of them on every PR (`scripts/validate_contracts.py`).
+
+## Active versions
+
+The ACTIVE bus contract set is `MESSAGE_TYPES` in
+`src/forge_common/contracts.py`; superseded version files remain as
+immutable history (ICD-3). Every contract declared in
+`agents/registry.yaml` must belong to the active set — enforced by
+`tests/test_registry_contracts.py` in CI-3.
