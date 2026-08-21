@@ -35,6 +35,11 @@ class NoCapableAgent(Exception):
     """No APPROVED definition offers the required capability (REG-3)."""
 
 
+class IneligibleAssignment(Exception):
+    """REG-2: assignment refused at claim time — the definition is no longer
+    APPROVED or the instance is not assignable. Rejected and audited."""
+
+
 def definition_ref(db: Any, agent_id: str) -> Any:
     return db.collection("agent_registry").document(agent_id)
 
@@ -118,6 +123,32 @@ def discover(db: Any, capability: str) -> dict[str, Any]:
     return {"definition": definition, "instance": instances[0]}
 
 
+def check_claim_eligibility(
+    txn: Any, db: Any, *, instance_id: str, role: str, **_ignored: Any
+) -> None:
+    """REG-2 enforced AT ASSIGNMENT TIME, transactionally (reads only).
+
+    Discovery's answer can go stale between the handler and the commit: the
+    definition and instance are re-read INSIDE the committing transaction and
+    the claim is refused — IneligibleAssignment — if the definition is not
+    APPROVED or the instance is not IDLE/ACTIVE for the right role. Callers
+    run all eligibility reads before any transaction write (real Firestore
+    requires reads first).
+    """
+    inst = layout.txn_get_dict(txn, instance_ref(db, instance_id))
+    if not inst or inst.get("state") not in ("IDLE", "ACTIVE") or inst.get("role") != role:
+        raise IneligibleAssignment(
+            f"instance {instance_id} is not assignable for role {role} "
+            f"(state={inst.get('state') if inst else 'missing'}) (REG-2)"
+        )
+    definition = layout.txn_get_dict(txn, definition_ref(db, inst["definition_id"]))
+    if not definition or definition.get("lifecycle_status") != "APPROVED":
+        raise IneligibleAssignment(
+            f"definition {inst['definition_id']} is not APPROVED "
+            f"({definition.get('lifecycle_status') if definition else 'missing'}) (REG-2)"
+        )
+
+
 def claim_work_package(
     txn: Any,
     db: Any,
@@ -129,9 +160,10 @@ def claim_work_package(
 ) -> None:
     """Create the exclusive-ownership record for a work package (ORC-1).
 
-    ``create`` collides if the work package already has an owner — exclusive
-    ownership is enforced by the datastore, not by convention. Marks the
-    owning instance ACTIVE in the same transaction (REG-2 instance state).
+    WRITES ONLY — callers must have run check_claim_eligibility earlier in
+    the same transaction (REG-2). ``create`` collides if the work package
+    already has an owner — exclusive ownership is enforced by the datastore,
+    not by convention. Marks the owning instance ACTIVE (REG-2 state).
     """
     txn.create(
         layout.work_package_ref(db, workflow_id, work_package_id),

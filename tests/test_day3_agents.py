@@ -1,13 +1,12 @@
 """Day 3 unit gate (CI-3): registry discovery, Orchestrator decompose/assign,
 specialist agents with stubbed models (ORC-1/2, AGT-1/2/7, REG-1/2/3)."""
 
-import json
-
 import pytest
 from services.maintenance.handlers import make_handler as make_maintenance_handler
 from services.orchestrator.handlers import make_nmc_handler
 from services.supply.handlers import make_handler as make_supply_handler
 
+from adk_stub import stub_garbage, stub_json
 from fake_firestore import FakeFirestore
 from forge_common import registry, state
 from forge_common.agent_base import StructuredAgent
@@ -52,15 +51,16 @@ REPORT_PAYLOAD = {
 }
 
 
-def orchestrator_model(prompt):
-    return json.dumps(
-        {
-            "objectives": {
-                "maintenance": "Plan replacement of the failed hydraulic actuator.",
-                "supply": "Source the approved actuator and report shipment status.",
-            }
-        }
-    )
+ORCH_OBJECTIVES = {
+    "objectives": {
+        "maintenance": "Plan replacement of the failed hydraulic actuator.",
+        "supply": "Source the approved actuator and report shipment status.",
+    }
+}
+
+
+def orchestrator_stub():
+    return stub_json(ORCH_OBJECTIVES)
 
 
 def nmc_message():
@@ -109,7 +109,7 @@ def test_discovery_ignores_non_approved_definitions():
 
 def test_orchestrator_decomposes_and_assigns_via_registry():
     db = ready_db()
-    handler = make_nmc_handler(db, model=orchestrator_model)
+    handler = make_nmc_handler(db, model=orchestrator_stub())
     assert (
         process_message(db, nmc_message(), handler, consumer_identity="forge-orchestrator") is True
     )
@@ -143,7 +143,7 @@ def test_work_package_ownership_is_exclusive():
     from forge_common import layout
 
     db = ready_db()
-    handler = make_nmc_handler(db, model=orchestrator_model)
+    handler = make_nmc_handler(db, model=orchestrator_stub())
     process_message(db, nmc_message(), handler, consumer_identity="forge-orchestrator")
 
     def steal(txn):
@@ -165,7 +165,7 @@ def test_no_capable_agent_blocks_with_escalation():
     state.create_workflow(
         db, workflow_id=WF, equipment_id="GX12-07", trace_id=TRACE, logical_time=0
     )
-    handler = make_nmc_handler(db, model=orchestrator_model)
+    handler = make_nmc_handler(db, model=orchestrator_stub())
     assert (
         process_message(db, nmc_message(), handler, consumer_identity="forge-orchestrator") is True
     )
@@ -181,7 +181,7 @@ def test_specialists_produce_contract_valid_outputs():
     process_message(
         db,
         nmc_message(),
-        make_nmc_handler(db, model=orchestrator_model),
+        make_nmc_handler(db, model=orchestrator_stub()),
         consumer_identity="forge-orchestrator",
     )
     outbox_ref = db.collection("workflows").document(WF).collection("outbox")
@@ -192,13 +192,13 @@ def test_specialists_produce_contract_valid_outputs():
     process_message(
         db,
         maintenance_asn,
-        make_maintenance_handler(lambda p: json.dumps(PLAN_PAYLOAD)),
+        make_maintenance_handler(db, stub_json(PLAN_PAYLOAD)),
         consumer_identity="forge-maintenance",
     )
     process_message(
         db,
         supply_asn,
-        make_supply_handler(lambda p: json.dumps(REPORT_PAYLOAD)),
+        make_supply_handler(db, stub_json(REPORT_PAYLOAD)),
         consumer_identity="forge-supply",
     )
     produced = [d.to_dict()["message"] for d in outbox_ref.stream()]
@@ -228,7 +228,7 @@ def test_specialist_ignores_other_roles_assignment():
     process_message(
         db,
         nmc_message(),
-        make_nmc_handler(db, model=orchestrator_model),
+        make_nmc_handler(db, model=orchestrator_stub()),
         consumer_identity="forge-orchestrator",
     )
     outbox_ref = db.collection("workflows").document(WF).collection("outbox")
@@ -242,7 +242,7 @@ def test_specialist_ignores_other_roles_assignment():
         process_message(
             db,
             supply_asn,
-            make_maintenance_handler(lambda p: json.dumps(PLAN_PAYLOAD)),
+            make_maintenance_handler(db, stub_json(PLAN_PAYLOAD)),
             consumer_identity="forge-maintenance",
         )
         is True
@@ -251,16 +251,10 @@ def test_specialist_ignores_other_roles_assignment():
 
 
 def test_agent_retries_then_emits_failure_event():
-    """AGT-7: ≤2 retries, then a contract-valid failure event."""
-    calls = []
+    """AGT-7 through the REAL ADK pipeline: ≤2 retries, then a failure event."""
 
-    def garbage_model(prompt):
-        calls.append(1)
-        return "NOT JSON AT ALL"
-
-    agent = StructuredAgent(
-        agent_id="agent-maintenance-01", role="maintenance", model=garbage_model
-    )
+    stub = stub_garbage()
+    agent = StructuredAgent(agent_id="agent-maintenance-01", role="maintenance", model=stub)
     result = agent.run(
         prompt_file="maintenance_action_plan.v1.md",
         variables={**NMC_PAYLOAD, "objective": "plan it"},
@@ -269,46 +263,176 @@ def test_agent_retries_then_emits_failure_event():
         work_package_id="wp-maintenance-gx12-07-hyd-001",
         trace_id=TRACE,
     )
-    assert len(calls) == 3  # initial + 2 retries
+    assert stub.call_count == 3  # initial + 2 retries, counted at the LLM layer
     assert result["envelope"]["schema_version"] == "agent_failure_event.v2"
     assert result["payload"]["failure_kind"] == "malformed_after_retries"
     assert result["payload"]["attempts"] == 3
     validate_message(result)
 
 
-def test_maintenance_boundary_no_release_field():
-    """AGT-1: a model output claiming release authority fails the contract."""
-
-    def overreaching_model(prompt):
-        return json.dumps({**PLAN_PAYLOAD, "release_equipment": True})
+@pytest.mark.parametrize(
+    ("role", "schema", "payload", "extra"),
+    [
+        ("maintenance", "maintenance_action_plan.v2", PLAN_PAYLOAD, "release_equipment"),
+        ("supply", "sourcing_report.v2", REPORT_PAYLOAD, "substitution_approved"),
+    ],
+)
+def test_specialist_boundaries_enforced_by_contract(role, schema, payload, extra):
+    """AGT-1/AGT-2: overreach fields fail contract validation via ADK path."""
 
     agent = StructuredAgent(
-        agent_id="agent-maintenance-01", role="maintenance", model=overreaching_model
+        agent_id=f"agent-{role}-01",
+        role=role,
+        model=stub_json({**payload, extra: True}),
     )
+    prompts = {
+        "maintenance": "maintenance_action_plan.v1.md",
+        "supply": "supply_sourcing_report.v1.md",
+    }
     result = agent.run(
-        prompt_file="maintenance_action_plan.v1.md",
-        variables={**NMC_PAYLOAD, "objective": "plan it"},
-        schema_version="maintenance_action_plan.v2",
+        prompt_file=prompts[role],
+        variables={**NMC_PAYLOAD, "objective": "do it"},
+        schema_version=schema,
         workflow_id=WF,
-        work_package_id="wp-maintenance-gx12-07-hyd-001",
+        work_package_id=f"wp-{role}-gx12-07-hyd-001",
         trace_id=TRACE,
     )
     assert result["envelope"]["schema_version"] == "agent_failure_event.v2"
 
 
-def test_supply_boundary_no_substitution_approval():
-    """AGT-2: a model output approving a substitution fails the contract."""
-
-    def overreaching_model(prompt):
-        return json.dumps({**REPORT_PAYLOAD, "substitution_approved": True})
-
-    agent = StructuredAgent(agent_id="agent-supply-01", role="supply", model=overreaching_model)
-    result = agent.run(
-        prompt_file="supply_sourcing_report.v1.md",
-        variables={**NMC_PAYLOAD, "objective": "source it"},
-        schema_version="sourcing_report.v2",
-        workflow_id=WF,
-        work_package_id="wp-supply-gx12-07-hyd-001",
-        trace_id=TRACE,
+def test_partial_discovery_never_commits_assignments():
+    """Gap 2 regression: one missing capability -> BLOCKED with ZERO
+    assignments, claims, or outbox writes — never a partial assignment."""
+    db = ready_db()
+    registry.definition_ref(db, "forge-supply").set(
+        {
+            **registry.definition_ref(db, "forge-supply").get().to_dict(),
+            "lifecycle_status": "RETIRED",
+        }
     )
-    assert result["envelope"]["schema_version"] == "agent_failure_event.v2"
+    handler = make_nmc_handler(db, model=orchestrator_stub())
+    assert process_message(db, nmc_message(), handler, consumer_identity="forge-orchestrator")
+    workflow = db.collection("workflows").document(WF)
+    assert workflow.get().to_dict()["status"] == "BLOCKED_AGENT_FAILURE"
+    assert list(workflow.collection("outbox").stream()) == []
+    assert list(workflow.collection("work_packages").stream()) == []
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, WF)]
+    assert "NO_CAPABLE_AGENT" in reasons
+
+
+def test_reasoning_exhaustion_blocks_with_escalation():
+    """Gap 5 regression: exhausted Orchestrator reasoning is a bounded,
+    audited terminal disposition — not a silent NACK loop."""
+    db = ready_db()
+    handler = make_nmc_handler(db, model=stub_garbage())
+    assert process_message(db, nmc_message(), handler, consumer_identity="forge-orchestrator")
+    assert (
+        db.collection("workflows").document(WF).get().to_dict()["status"] == "BLOCKED_AGENT_FAILURE"
+    )
+    trail = state.reconstruct_audit_trail(db, WF)
+    exhausted = [
+        e for e in trail if e["payload"]["reason_code"] == "ORCHESTRATOR_REASONING_EXHAUSTED"
+    ]
+    kinds = sorted(e["payload"]["event_kind"] for e in exhausted)
+    # Exactly one escalation, plus the BLOCKED state_change carrying the same reason.
+    assert kinds == ["escalation", "state_change"]
+
+
+def test_stale_discovery_rejected_at_claim_time():
+    """Gap 3 regression (REG-2): eligibility is re-checked transactionally at
+    claim time; a stale claim is rejected, audited, and redeliverable."""
+    from forge_common.bus import TxnWrites
+    from forge_common.registry import IneligibleAssignment
+
+    db = ready_db()
+    message = nmc_message()
+
+    def stale_plan(msg, writes: TxnWrites):
+        # Simulates discovery gone stale: definition retired AFTER the
+        # handler resolved it but BEFORE the commit transaction runs.
+        registry.definition_ref(db, "forge-maintenance").set(
+            {
+                **registry.definition_ref(db, "forge-maintenance").get().to_dict(),
+                "lifecycle_status": "RETIRED",
+            }
+        )
+        writes.work_package_claims.append(
+            {
+                "work_package_id": "wp-maintenance-gx12-07-hyd-001",
+                "instance_id": "agent-maintenance-01",
+                "role": "maintenance",
+            }
+        )
+
+    with pytest.raises(IneligibleAssignment):
+        process_message(db, message, stale_plan, consumer_identity="forge-orchestrator")
+    workflow = db.collection("workflows").document(WF)
+    assert workflow.get().to_dict()["status"] == "INTAKE"  # nothing committed
+    assert list(workflow.collection("work_packages").stream()) == []
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, WF)]
+    assert "ASSIGNMENT_INELIGIBLE" in reasons
+    # Claim released: the delivery is reprocessable once state is repaired.
+    registry.definition_ref(db, "forge-maintenance").set(
+        {
+            **registry.definition_ref(db, "forge-maintenance").get().to_dict(),
+            "lifecycle_status": "APPROVED",
+        }
+    )
+    assert process_message(db, message, lambda m, w: None, consumer_identity="forge-orchestrator")
+
+
+def test_failed_instance_rejected_at_claim_time():
+    """Gap 3 regression (REG-2): a FAILED instance cannot be assigned."""
+    from forge_common.bus import TxnWrites
+    from forge_common.registry import IneligibleAssignment
+
+    db = ready_db()
+
+    def stale_plan(msg, writes: TxnWrites):
+        registry.instance_ref(db, "agent-maintenance-01").set({"state": "FAILED"}, merge=True)
+        writes.work_package_claims.append(
+            {
+                "work_package_id": "wp-maintenance-gx12-07-hyd-001",
+                "instance_id": "agent-maintenance-01",
+                "role": "maintenance",
+            }
+        )
+
+    with pytest.raises(IneligibleAssignment):
+        process_message(db, nmc_message(), stale_plan, consumer_identity="forge-orchestrator")
+
+
+def test_specialist_runs_are_audited():
+    """Gap 4 regression (AUD-1): success and exhaustion both hit the trail,
+    atomically with their outbox message."""
+    db = ready_db()
+    process_message(
+        db,
+        nmc_message(),
+        make_nmc_handler(db, model=orchestrator_stub()),
+        consumer_identity="forge-orchestrator",
+    )
+    outbox_ref = db.collection("workflows").document(WF).collection("outbox")
+    assignments = {
+        d.to_dict()["message"]["payload"]["role"]: d.to_dict()["message"]
+        for d in outbox_ref.stream()
+        if d.to_dict()["message"]["envelope"]["schema_version"] == "work_package_assignment.v2"
+    }
+    process_message(
+        db,
+        assignments["maintenance"],
+        make_maintenance_handler(db, stub_json(PLAN_PAYLOAD)),
+        consumer_identity="forge-maintenance",
+    )
+    process_message(
+        db,
+        assignments["supply"],
+        make_supply_handler(db, stub_garbage()),
+        consumer_identity="forge-supply",
+    )
+    trail = state.reconstruct_audit_trail(db, WF)
+    by_reason = {e["payload"]["reason_code"]: e["payload"] for e in trail}
+    assert by_reason["DOMAIN_OUTPUT_PRODUCED"]["event_kind"] == "decision"
+    assert by_reason["DOMAIN_OUTPUT_PRODUCED"]["agent_identity"] == "agent-maintenance-01"
+    assert by_reason["SPECIALIST_MALFORMED"]["event_kind"] == "failure"
+    assert by_reason["SPECIALIST_MALFORMED"]["agent_identity"] == "agent-supply-01"

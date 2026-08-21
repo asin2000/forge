@@ -270,6 +270,10 @@ def process_message(
                 or current.get("status") == "done"
             ):
                 return False  # claim lost to a takeover — the holder will commit
+            # All claim-eligibility READS precede any write (REG-2; real
+            # Firestore requires reads before writes in a transaction).
+            for claim in writes.work_package_claims:
+                registry.check_claim_eligibility(txn, db, **claim)
             if writes.transition is not None:
                 state.apply_transition(txn, db, workflow_id=workflow_id, **writes.transition)
             for claim in writes.work_package_claims:
@@ -290,7 +294,18 @@ def process_message(
                 )
             return True
 
-        return layout.run_in_transaction(db, _commit)
+        try:
+            return layout.run_in_transaction(db, _commit)
+        except registry.IneligibleAssignment:
+            # REG-2: rejected AND audited — then re-raised so the delivery
+            # NACKs and the redelivery re-discovers against fresh state.
+            _audit_rejection(
+                db,
+                message,
+                consumer_identity=consumer_identity,
+                reason_code="ASSIGNMENT_INELIGIBLE",
+            )
+            raise
     except Exception:
         _release_claim()
         raise

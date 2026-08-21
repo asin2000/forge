@@ -222,11 +222,12 @@ requirements:
     verification_method: inspection
   PLT-2:
     implemented_by:
-      - pyproject.toml
+      - src/forge_common/agent_base.py
       - requirements.lock
     verified_by:
-      - requirements.lock
-    verification_method: document
+      - tests/test_day3_agents.py
+      - scripts/smoke_adk_agent.py
+    verification_method: test
   PLT-3:
     implemented_by:
       - infra/setup-gcp.sh
