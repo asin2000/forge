@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Live Day-5 corrective smoke (SEC-1 defense in depth, all live):
+"""LIVE COMPONENT SMOKE (SEC-1 defense in depth) — exercises three live
+components individually; it is NOT the end-to-end pipeline
+(ingest_document -> screen_document -> outbox -> Safety), which runs live
+in Lane 2 (CI-6/CI-8):
 
 1. Real GCS quarantine round-trip (raw bytes in the bucket; Firestore
    metadata carries no raw_text).
@@ -83,4 +86,7 @@ print(
     f"candidate={classification['candidate_part_identifier']}"
 )
 assert classification["label"] in ("suspicious", "malicious")
-print("QUARANTINE LIVE SMOKE: PASS — armor catches the probe; the classifier catches the dilution")
+print(
+    "QUARANTINE LIVE COMPONENT SMOKE: PASS — armor catches the probe; "
+    "the classifier catches the dilution (end-to-end pipeline = Lane 2)"
+)

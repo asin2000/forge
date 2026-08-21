@@ -93,10 +93,13 @@ def interpret_sanitization(body: dict[str, Any]) -> dict[str, Any]:
     result = body.get("sanitizationResult")
     if not isinstance(result, dict):
         raise ModelArmorError(f"missing sanitizationResult in response: {body!r}")
-    invocation = result.get("invocationResult", "SUCCESS")
+    invocation = result.get("invocationResult")
     if invocation != "SUCCESS":
+        # Only an EXPLICIT SUCCESS proves every filter ran. Missing or
+        # unspecified invocationResult fails closed exactly like PARTIAL
+        # and FAILURE — a defaulted "SUCCESS" would be a fail-open.
         raise ModelArmorError(
-            f"incomplete filter execution: invocationResult={invocation} (fail closed)"
+            f"incomplete filter execution: invocationResult={invocation!r} (fail closed)"
         )
     match_state = result.get("filterMatchState")
     if match_state not in ("MATCH_FOUND", "NO_MATCH_FOUND"):
