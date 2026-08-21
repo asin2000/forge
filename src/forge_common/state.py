@@ -58,23 +58,53 @@ class GateBlocked(Exception):
     """HUM-1: gated transition without a valid, unconsumed approved decision."""
 
 
-def _check_gate(target: str, approval: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Return the approval payload if the gate passes; raise GateBlocked if not."""
+def record_approval_decision(db: Any, message: dict[str, Any]) -> str:
+    """Persist an authoritative approval_decision.v2 record (HUM-1).
+
+    Contract-validates the FULL message, then stores it under
+    ``workflows/{id}/approvals/{approval_id}``. In production this is called
+    only by the approval surface behind Cloud Run IAM/IAP, where
+    ``approver_identity`` derives from the authenticated principal — the
+    state layer then proves "a recorded approval exists", and authentication
+    is enforced at the only writer. Returns the approval_id.
+    """
+    if validate_message(message) != "approval_decision.v2":
+        raise GateBlocked("only approval_decision.v2 may be recorded (HUM-1)")
+    payload = message["payload"]
+    workflow_id = message["envelope"]["workflow_id"]
+
+    def _record(txn: Any) -> None:
+        # Leading read: see create_workflow — write-only transactions never
+        # begin on the real client. Also an explicit duplicate check.
+        if layout.txn_get_dict(txn, layout.approval_ref(db, workflow_id, payload["approval_id"])):
+            raise GateBlocked(f"approval {payload['approval_id']} already recorded (HUM-1)")
+        txn.create(
+            layout.approval_ref(db, workflow_id, payload["approval_id"]),
+            {"message": message, "recorded_observed_at": now_iso()},
+        )
+
+    layout.run_in_transaction(db, _record)
+    return payload["approval_id"]
+
+
+def _check_gate(
+    txn: Any, db: Any, workflow_id: str, target: str, approval_id: str | None
+) -> dict[str, Any] | None:
+    """Retrieve and check the recorded approval; raise GateBlocked if absent
+    or unsuitable. Returns the approval payload for gated targets."""
     action_type = GATED_TARGETS.get(target)
     if action_type is None:
         return None
-    if approval is None:
+    if approval_id is None:
         raise GateBlocked(f"{target} requires HUM-1 approval ({action_type})")
-    payload = approval.get("payload", approval)
-    required = ("approval_id", "approver_identity", "decided_at")
-    if (
-        payload.get("action_type") != action_type
-        or payload.get("decision") != "approved"
-        or any(not payload.get(field) for field in required)
-    ):
+    record = layout.txn_get_dict(txn, layout.approval_ref(db, workflow_id, approval_id))
+    if record is None:
+        raise GateBlocked(f"no recorded approval {approval_id} for workflow {workflow_id} (HUM-1)")
+    payload = record["message"]["payload"]
+    if payload.get("action_type") != action_type or payload.get("decision") != "approved":
         raise GateBlocked(
-            f"{target} requires an approved {action_type} decision with "
-            f"approval_id, approver_identity and decided_at (HUM-1)"
+            f"{target} requires an approved {action_type} decision; "
+            f"{approval_id} is {payload.get('decision')} {payload.get('action_type')} (HUM-1)"
         )
     return payload
 
@@ -88,7 +118,7 @@ def apply_transition(
     agent_identity: str,
     trace_id: str,
     reason_code: str,
-    approval: dict[str, Any] | None = None,
+    approval_id: str | None = None,
     due_at: int | None = None,
     outbox_messages: list[dict[str, Any]] | None = None,
     detail: str | None = None,
@@ -96,10 +126,16 @@ def apply_transition(
     """Apply one checked, gated, audited transition inside ``txn`` (AUD-2).
 
     Rules enforced here (and nowhere else, so there is no bypass):
-    the ALLOWED_TRANSITIONS table; HUM-1 gates with one-time approval
-    consumption; ``due_at`` REQUIRED when suspending and FORBIDDEN otherwise
+    the ALLOWED_TRANSITIONS table; HUM-1 gates that transactionally retrieve
+    the authoritative recorded approval by ``approval_id`` and consume it
+    once; ``due_at`` REQUIRED when suspending and FORBIDDEN otherwise
     (ORC-5 — a suspension without a due day could never resume unattended);
     outbox messages contract-validated at enqueue (ICD-2).
+
+    Retry-safe by construction: this function performs only Firestore reads,
+    pure computation, and buffered writes — callers MUST NOT put model or
+    tool calls inside the transaction callback (Firestore reruns it on
+    contention); see bus.process_message for the boundary.
     """
     # All reads first (real Firestore requires reads before writes).
     current = layout.txn_get_dict(txn, layout.workflow_ref(db, workflow_id))
@@ -113,7 +149,7 @@ def apply_transition(
     if target not in ALLOWED_TRANSITIONS.get(source, set()):
         raise InvalidTransition(f"{source} -> {target} is not allowed")
 
-    approval_payload = _check_gate(target, approval)
+    approval_payload = _check_gate(txn, db, workflow_id, target, approval_id)
     consumed_ref = None
     if approval_payload is not None:
         consumed_ref = layout.consumed_approval_ref(
@@ -199,6 +235,11 @@ def create_workflow(
     """Create the workflow state document in INTAKE, audited (ORC-5, AUD-1)."""
 
     def _create(txn: Any) -> dict[str, Any]:
+        # Leading read: real transactions begin lazily on the first read —
+        # a write-only transaction never acquires an ID and cannot commit.
+        # Doubles as an explicit existence check.
+        if layout.txn_get_dict(txn, layout.workflow_ref(db, workflow_id)):
+            raise InvalidTransition(f"workflow {workflow_id} already exists")
         doc = layout.validate_state_doc(
             {
                 "workflow_id": workflow_id,

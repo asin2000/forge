@@ -8,11 +8,15 @@ marker keyed by ``(idempotency_key, consumer_identity)``: duplicate delivery
 produces no duplicate side effects, and fan-out subscribers never suppress
 each other (ICD-5/ICD-6).
 
-Handlers are pure: they receive the message and a :class:`TxnWrites`
-collector. A state change is requested via ``writes.transition`` and applied
-through :func:`forge_common.state.apply_transition` in the SAME transaction —
-there is no unchecked state-write path, so the transition table and both
-HUM-1 gates hold on the bus path too.
+Handlers run OUTSIDE the transaction callback and exactly once per accepted
+delivery: Firestore reruns transaction callbacks on contention, so model,
+tool, or any other side-effectful call must never live inside one. The
+handler produces a precomputed, deterministic effect plan (:class:`TxnWrites`)
+and only that plan is applied inside the transaction. A state change is
+requested via ``writes.transition`` and applied through
+:func:`forge_common.state.apply_transition` in the SAME transaction as the
+inbox marker — there is no unchecked state-write path, so the transition
+table and both HUM-1 gates hold on the bus path too.
 
 Publication: ``drain_outbox`` re-validates each message (ICD-2 at publish)
 and publishes unpublished records in enqueue order with the Pub/Sub ordering
@@ -25,14 +29,20 @@ code.
 from __future__ import annotations
 
 import dataclasses
+import json
 from collections.abc import Callable
 from typing import Any
 
 from forge_common import layout, state
 from forge_common.audit import build_audit_event, now_iso
 from forge_common.contracts import ContractViolation, validate_message
+from forge_common.messages import sha256_hex
 
 CYBER_TRUST_IDENTITY = "forge-cyber-trust"
+
+#: Reserved workflow ID collecting rejection audits for messages too
+#: malformed to route (no valid workflow_id in the envelope).
+UNROUTABLE_AUDIT_WORKFLOW = "wf-security-unroutable"
 
 
 class UntrustedMessageRejected(Exception):
@@ -63,27 +73,39 @@ def _audit_rejection(
     workflow_id; a message too malformed to route is still rejected, just
     not workflow-attributable.
     """
-    envelope = message.get("envelope") or {}
+    envelope = message.get("envelope") if isinstance(message, dict) else None
+    envelope = envelope if isinstance(envelope, dict) else {}
     workflow_id = envelope.get("workflow_id")
     trace_id = envelope.get("trace_id")
     if not isinstance(workflow_id, str) or not workflow_id.startswith("wf-"):
-        return
+        # Unroutable malformed input still gets audited (ICD-2 "rejected and
+        # audited" has no exemption) — recorded under a reserved security
+        # workflow so nothing is silently dropped.
+        workflow_id = UNROUTABLE_AUDIT_WORKFLOW
     if not isinstance(trace_id, str) or len(trace_id) != 32:
         trace_id = "0" * 32
+    try:
+        json.dumps(message, sort_keys=True)
+        input_obj: Any = message
+    except TypeError:  # not JSON-serializable — audit its repr instead
+        input_obj = {"unserializable": repr(message)[:2000]}
     audit = build_audit_event(
         workflow_id=workflow_id,
         trace_id=trace_id,
         agent_identity=consumer_identity,
         event_kind="blocked_action",
         reason_code=reason_code,
-        input_obj=message,
+        input_obj=input_obj,
         output_obj={"rejected": True},
         effective_at=_clock_time(db),
         detail=f"rejected at subscribe by {consumer_identity}",
     )
 
     def _write(txn: Any) -> None:
-        txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
+        ref = layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"])
+        if layout.txn_get_dict(txn, ref):  # leading read: lazy-begin + idempotent
+            return
+        txn.create(ref, audit)
 
     layout.run_in_transaction(db, _write)
 
@@ -130,21 +152,53 @@ def process_message(
             f"{consumer_identity} may not consume trust_state={envelope['trust_state']} (DAT-2)"
         )
     workflow_id = envelope["workflow_id"]
-    # Consumer-scoped marker: fan-out subscribers dedupe independently.
-    marker_id = f"{envelope['idempotency_key']}--{consumer_identity}"
+    # Consumer-scoped marker, hashed: contract-valid idempotency keys may
+    # contain characters (e.g. '/') that are illegal in Firestore document
+    # IDs. Raw values are kept in the marker document for inspection.
+    marker_id = sha256_hex([envelope["idempotency_key"], consumer_identity])
+    marker_ref = layout.inbox_ref(db, workflow_id, marker_id)
+
+    # Fast-path duplicate check, then run the handler OUTSIDE any
+    # transaction: Firestore reruns transaction callbacks on contention, and
+    # the handler is where model/tool calls will live (Day 3+). The handler
+    # runs at most once per process_message call; only its precomputed
+    # effect plan enters the transaction.
+    snapshot = marker_ref.get()
+    if snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot:
+        return False
+    writes = TxnWrites()
+    handler(message, writes)
+    for audit in writes.audit_events:
+        # Handler-supplied audit events are full bus messages: validate the
+        # contract and pin them to the consumed message's workflow (ICD-2).
+        if validate_message(audit) != "audit_event.v2":
+            raise ContractViolation(
+                audit["envelope"]["schema_version"],
+                ["only audit_event.v2 may be written to the audit trail"],
+            )
+        if audit["envelope"]["workflow_id"] != workflow_id:
+            raise ContractViolation(
+                "audit_event.v2",
+                [f"audit event workflow_id != consumed message workflow {workflow_id}"],
+            )
+    for out in writes.outbox_messages:
+        validate_message(out)
+        if out["envelope"]["workflow_id"] != workflow_id:
+            raise ContractViolation(
+                out["envelope"]["schema_version"],
+                [f"outbox message workflow_id != consumed message workflow {workflow_id}"],
+            )
 
     def _consume(txn: Any) -> bool:
-        existing = layout.txn_get_dict(txn, layout.inbox_ref(db, workflow_id, marker_id))
-        if existing:
+        if layout.txn_get_dict(txn, marker_ref):
             return False
-        writes = TxnWrites()
-        handler(message, writes)
         if writes.transition is not None:
             state.apply_transition(txn, db, workflow_id=workflow_id, **writes.transition)
         txn.create(
-            layout.inbox_ref(db, workflow_id, marker_id),
+            marker_ref,
             {
                 "event_id": envelope["event_id"],
+                "idempotency_key": envelope["idempotency_key"],
                 "consumer_identity": consumer_identity,
                 "processed_observed_at": now_iso(),
             },
@@ -155,7 +209,6 @@ def process_message(
                 audit,
             )
         for out in writes.outbox_messages:
-            validate_message(out)
             txn.create(
                 layout.outbox_ref(db, workflow_id, out["envelope"]["event_id"]),
                 {"message": out, "published": False, "enqueued_at": now_iso()},

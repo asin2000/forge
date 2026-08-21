@@ -14,7 +14,11 @@ from forge_common.bus import (
     process_message,
 )
 from forge_common.clock import advance_clock, build_due_event, emit_due_events
-from forge_common.messages import deterministic_trace_id
+from forge_common.messages import (
+    build_envelope,
+    deterministic_event_id,
+    deterministic_trace_id,
+)
 
 WF = "wf-gx12-07-hyd-001"
 TRACE = deterministic_trace_id(WF)
@@ -30,16 +34,26 @@ def make_workflow(db, logical_time=0):
     )
 
 
-def approval(action_type, decision="approved", approval_id=None):
-    return {
+def record_approval(db, action_type, decision="approved", approval_id=None):
+    """Record an authoritative approval_decision.v2 (as the IAP surface would)."""
+    apr_id = approval_id or f"apr-{action_type.replace('_', '-')}-0001"
+    message = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            schema_version="approval_decision.v2",
+            event_id=deterministic_event_id("apr", WF, apr_id),
+            trace_id=TRACE,
+            idempotency_key=f"idem-{apr_id}",
+        ),
         "payload": {
-            "approval_id": approval_id or f"apr-{action_type.replace('_', '-')}-0001",
+            "approval_id": apr_id,
             "action_type": action_type,
             "decision": decision,
             "approver_identity": "approver@example.test",
             "decided_at": "2026-08-21T12:00:00Z",
-        }
+        },
     }
+    return state.record_approval_decision(db, message)
 
 
 def advance_to(db, target_chain, **kwargs):
@@ -109,7 +123,12 @@ def test_gated_transition_blocked_then_allowed():
             agent_identity="forge-orchestrator",
             trace_id=TRACE,
             reason_code="SCHEDULE_OVERRIDE",
-            approval=approval("schedule_override", decision="rejected"),
+            approval_id=record_approval(
+                db,
+                "schedule_override",
+                decision="rejected",
+                approval_id="apr-schedule-override-rej1",
+            ),
         )
     doc = state.transition_workflow(
         db,
@@ -118,7 +137,7 @@ def test_gated_transition_blocked_then_allowed():
         agent_identity="forge-orchestrator",
         trace_id=TRACE,
         reason_code="SCHEDULE_OVERRIDE",
-        approval=approval("schedule_override"),
+        approval_id=record_approval(db, "schedule_override"),
         due_at=21,
     )
     assert doc["status"] == "SUSPENDED_AWAITING_PART"
@@ -139,7 +158,7 @@ def test_release_gate_never_unattended():
         agent_identity="forge-orchestrator",
         trace_id=TRACE,
         reason_code="SCHEDULE_OVERRIDE",
-        approval=approval("schedule_override"),
+        approval_id=record_approval(db, "schedule_override"),
         due_at=21,
     )
     advance_to(db, ["ASSEMBLY_RESUMED", "AWAITING_RELEASE_APPROVAL"])
@@ -151,7 +170,7 @@ def test_release_gate_never_unattended():
             agent_identity="forge-orchestrator",
             trace_id=TRACE,
             reason_code="EQUIPMENT_RELEASE",
-            approval=approval("schedule_override"),  # wrong action_type
+            approval_id="apr-schedule-override-0001",  # wrong action_type for release
         )
     doc = state.transition_workflow(
         db,
@@ -160,7 +179,7 @@ def test_release_gate_never_unattended():
         agent_identity="forge-orchestrator",
         trace_id=TRACE,
         reason_code="EQUIPMENT_RELEASE",
-        approval=approval("equipment_release"),
+        approval_id=record_approval(db, "equipment_release"),
     )
     assert doc["status"] == "RELEASED"
 
@@ -222,13 +241,13 @@ def test_clock_double_fire_single_due_event():
         agent_identity="forge-orchestrator",
         trace_id=TRACE,
         reason_code="SCHEDULE_OVERRIDE",
-        approval=approval("schedule_override"),
+        approval_id=record_approval(db, "schedule_override"),
         due_at=21,
     )
     new_time = advance_clock(db, 21)
     assert new_time == 21
-    first = emit_due_events(db, logical_time=new_time, trace_id=TRACE)
-    second = emit_due_events(db, logical_time=new_time, trace_id=TRACE)
+    first = emit_due_events(db, trace_id=TRACE)
+    second = emit_due_events(db, trace_id=TRACE)
     assert first == [WF] and second == []
     outbox = list(db.collection("workflows").document(WF).collection("outbox").stream())
     assert len(outbox) == 1
@@ -293,7 +312,7 @@ def test_audit_trail_reconstructs_across_time_skip():
         agent_identity="forge-orchestrator",
         trace_id=TRACE,
         reason_code="SCHEDULE_OVERRIDE",
-        approval=approval("schedule_override"),
+        approval_id=record_approval(db, "schedule_override"),
         due_at=21,
     )
     trail = state.reconstruct_audit_trail(db, WF)
@@ -319,7 +338,7 @@ def suspend(db, due_at=21):
         agent_identity="forge-orchestrator",
         trace_id=TRACE,
         reason_code="SCHEDULE_OVERRIDE",
-        approval=approval("schedule_override"),
+        approval_id=record_approval(db, "schedule_override"),
         due_at=due_at,
     )
 
@@ -330,7 +349,7 @@ def test_post_skip_events_carry_advanced_effective_at():
     make_workflow(db)
     suspend(db, due_at=21)
     assert advance_clock(db, 21) == 21
-    emit_due_events(db, logical_time=21, trace_id=TRACE)
+    emit_due_events(db, trace_id=TRACE)
     advance_to(db, ["ASSEMBLY_RESUMED", "AWAITING_RELEASE_APPROVAL"])
     doc = state.transition_workflow(
         db,
@@ -339,7 +358,7 @@ def test_post_skip_events_carry_advanced_effective_at():
         agent_identity="forge-orchestrator",
         trace_id=TRACE,
         reason_code="EQUIPMENT_RELEASE",
-        approval=approval("equipment_release"),
+        approval_id=record_approval(db, "equipment_release"),
     )
     assert doc["logical_time"] == 21
     trail = state.reconstruct_audit_trail(db, WF)
@@ -383,7 +402,7 @@ def test_replayed_approval_cannot_authorize_second_transition():
             agent_identity="forge-orchestrator",
             trace_id=TRACE,
             reason_code="SCHEDULE_OVERRIDE",
-            approval=approval("schedule_override"),  # same approval_id as before
+            approval_id="apr-schedule-override-0001",  # already recorded AND consumed
             due_at=30,
         )
     doc = state.transition_workflow(
@@ -393,7 +412,9 @@ def test_replayed_approval_cannot_authorize_second_transition():
         agent_identity="forge-orchestrator",
         trace_id=TRACE,
         reason_code="SCHEDULE_OVERRIDE",
-        approval=approval("schedule_override", approval_id="apr-schedule-override-0002"),
+        approval_id=record_approval(
+            db, "schedule_override", approval_id="apr-schedule-override-0002"
+        ),
         due_at=30,
     )
     assert doc["due_at"] == 30
@@ -412,7 +433,7 @@ def test_suspension_requires_due_at_and_rejects_stray_due_at():
             agent_identity="forge-orchestrator",
             trace_id=TRACE,
             reason_code="SCHEDULE_OVERRIDE",
-            approval=approval("schedule_override"),
+            approval_id=record_approval(db, "schedule_override"),
         )
     with pytest.raises(state.InvalidTransition, match="due_at"):
         state.transition_workflow(
@@ -530,3 +551,87 @@ def test_drain_outbox_publishes_in_enqueue_order():
     order = []
     drain_outbox(db, WF, lambda msg, key: order.append(msg["payload"]["due_at_logical"]))
     assert order == [7, 21]
+
+
+def test_unroutable_malformed_message_still_audited():
+    """ICD-2: a message with no usable workflow_id is rejected AND audited."""
+    from forge_common.bus import UNROUTABLE_AUDIT_WORKFLOW
+    from forge_common.contracts import ContractViolation
+
+    db = FakeFirestore()
+    with pytest.raises(ContractViolation):
+        process_message(db, {"garbage": True}, lambda m, w: None, consumer_identity="forge-safety")
+    docs = list(
+        db.collection("workflows").document(UNROUTABLE_AUDIT_WORKFLOW).collection("audit").stream()
+    )
+    assert len(docs) == 1
+    assert docs[0].to_dict()["payload"]["reason_code"] == "CONTRACT_VIOLATION_REJECTED"
+
+
+def test_handler_audit_events_are_validated_and_pinned():
+    """Handler-supplied audits must be contract-valid and match the workflow."""
+    from forge_common.contracts import ContractViolation
+
+    db = FakeFirestore()
+    make_workflow(db)
+    message = build_due_event(workflow_id=WF, trace_id=TRACE, due_at=21)
+
+    def wrong_workflow(msg, writes: TxnWrites):
+        writes.audit_events.append(
+            build_audit_event(
+                workflow_id="wf-other-workflow-999",
+                trace_id=TRACE,
+                agent_identity="forge-orchestrator",
+                event_kind="decision",
+                reason_code="MISROUTED",
+                input_obj={},
+                output_obj={},
+                effective_at=0,
+            )
+        )
+
+    before = dict(db.store)
+    with pytest.raises(ContractViolation, match="workflow"):
+        process_message(db, message, wrong_workflow, consumer_identity="forge-safety")
+    assert db.store == before
+
+
+def test_gate_requires_recorded_approval():
+    """HUM-1: an approval_id with no recorded decision does not pass."""
+    db = FakeFirestore()
+    make_workflow(db)
+    advance_to(db, ["PLANNING", "VALIDATING", "AWAITING_SCHEDULE_APPROVAL"])
+    with pytest.raises(state.GateBlocked, match="no recorded approval"):
+        state.transition_workflow(
+            db,
+            workflow_id=WF,
+            target="SUSPENDED_AWAITING_PART",
+            agent_identity="forge-orchestrator",
+            trace_id=TRACE,
+            reason_code="SCHEDULE_OVERRIDE",
+            approval_id="apr-never-recorded-0001",
+            due_at=21,
+        )
+
+
+def test_clock_advance_is_audited():
+    """AUD-1: the Logical Clock jump itself is reconstructable from Firestore."""
+    from forge_common.clock import CLOCK_AUDIT_WORKFLOW
+
+    db = FakeFirestore()
+    advance_clock(db, 21)
+    trail = state.reconstruct_audit_trail(db, CLOCK_AUDIT_WORKFLOW)
+    assert len(trail) == 1
+    assert trail[0]["payload"]["reason_code"] == "CLOCK_ADVANCED"
+    assert trail[0]["payload"]["effective_at"] == 21
+
+
+def test_due_events_recheck_state_transactionally():
+    """A workflow that left suspension between scan and enqueue emits nothing."""
+    db = FakeFirestore()
+    make_workflow(db)
+    suspend(db, due_at=5)
+    advance_clock(db, 5)
+    # Legitimate resume before the emitter runs: due event no longer valid.
+    advance_to(db, ["ASSEMBLY_RESUMED"])
+    assert emit_due_events(db, trace_id=TRACE) == []

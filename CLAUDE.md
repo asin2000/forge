@@ -85,8 +85,8 @@ go/no-go Wed Aug 26 EOD (PLT-5).
 ## Where we are
 
 Check `git log --oneline` against the calendar in `FORGE-BUILD-PLAN.md` §2.
-Day 1 (Fri Aug 21) is complete: contracts, validation harness, CI Lane 1,
-traceability, GCP bootstrap scripts — plus the **v1.2 baseline landing**
+Day 1 (Fri Aug 21) complete. Day 2 core merged (PR #2) and VERIFIED via the
+emulator gate (PR #3): contracts, CI Lane 1, traceability, GCP bootstrap,
 (envelope/messages at v2, `agents/registry.yaml`, `infra/residency.yaml`,
 `PREEXISTING_WORK.md`, traceability extended with REG/OBS/DAT/CI-9/SUB-8).
 Still Day 1: GCP bootstrap + Vertex/Model Armor smoke calls (R2). Day 2+ must

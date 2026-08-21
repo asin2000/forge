@@ -72,6 +72,11 @@ def workflow_ref(db: Any, workflow_id: str) -> Any:
     return db.collection("workflows").document(workflow_id)
 
 
+def approval_ref(db: Any, workflow_id: str, approval_id: str) -> Any:
+    """Authoritative approval_decision record written by the HUM-1 surface."""
+    return workflow_ref(db, workflow_id).collection("approvals").document(approval_id)
+
+
 def consumed_approval_ref(db: Any, workflow_id: str, approval_id: str) -> Any:
     """Marker consumed atomically with a gated transition (HUM-1 replay guard)."""
     return workflow_ref(db, workflow_id).collection("approvals_consumed").document(approval_id)

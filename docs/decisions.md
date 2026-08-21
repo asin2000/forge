@@ -91,3 +91,32 @@ all fixed with regression tests:
   "rejected and audited"); due-event identity includes `purpose`.
 - Documented scope limit: re-arming an already-fired absolute due day will
   not re-fire (needs a suspension-epoch counter = state schema bump; §10).
+
+## 2026-08-22 — Day 2 verification gate (branch `day2-verification-gate`)
+
+Entrant review (read-only) correctly rejected "Day 2 complete": the emulator
+exit gate had not run and the handler executed inside the transaction
+callback. Both closed, plus five confirmed findings:
+- **Retry boundary**: handlers now run OUTSIDE the transaction, exactly once
+  per accepted delivery, producing a precomputed effect plan; only the plan
+  (and the deterministic, read-only apply_transition) runs inside the
+  callback Firestore may rerun. Day 3 model/tool calls live in handlers.
+- **Emulator gate**: `tests/emulator/` runs the real clients against the
+  Firestore + Pub/Sub emulators in a new pr-gate job — real Transaction
+  semantics (the generator regression, on the real client), ordered
+  publish/pull, outbox→publish→nack→redeliver→dedupe end-to-end, and the
+  5-attempt DLQ policy on subscriptions (`forge_common.pubsub`). Emulator
+  does not enforce DLQ forwarding — verified in Lane 2 (CI-6).
+- **HUM-1 chain**: transitions take `approval_id`; the authoritative
+  approval_decision.v2 record (contract-validated at write via
+  `record_approval_decision`, production writer = the IAP surface) is
+  retrieved transactionally. State layer now proves a recorded decision,
+  with authentication enforced at the only writer.
+- **Clock integrity**: `emit_due_events` reads the clock itself and
+  transactionally rechecks status/due_at per workflow; `advance_clock`
+  audits the jump under `wf-system-clock`.
+- Unroutable malformed messages audit under `wf-security-unroutable`;
+  inbox marker IDs are hashed (Firestore ID-safe); handler-supplied audit
+  and outbox messages are contract-validated and workflow-pinned.
+- Governance drift fixed: build plan → v1.2 / 21 days / `v1.2-demo`;
+  traceability message-schema refs → `.v2`.

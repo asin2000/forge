@@ -1,8 +1,8 @@
 # FORGE Build Plan
 **Fleet Operational Readiness & Governed Execution — Execution Schedule**
-Plan v1.0 · 2026-08-21 · Subordinate to FORGE-REQUIREMENTS.md v1.1.2
+Plan v1.1 · 2026-08-21 · Subordinate to FORGE-REQUIREMENTS.md v1.2
 
-This plan schedules the build; it does not amend the baseline. If this plan and FORGE-REQUIREMENTS.md v1.1.2 disagree, the requirements document wins. The spec's relative gates ("Day 6", "Day 8") are hereby anchored to calendar dates with Day 1 = Friday, August 21, 2026.
+This plan schedules the build; it does not amend the baseline. If this plan and FORGE-REQUIREMENTS.md v1.2 disagree, the requirements document wins. The spec's relative gates ("Day 6", "Day 8") are hereby anchored to calendar dates with Day 1 = Friday, August 21, 2026.
 
 ---
 
@@ -29,7 +29,7 @@ This plan schedules the build; it does not amend the baseline. If this plan and 
 | 5 | Tue Aug 25 | SEC quarantine pipeline + Cyber Trust | — |
 | 6 | Wed Aug 26 | Human gate, dashboard, IAM hardening, deploy.sh | **Gemma go/no-go (PLT-5)** |
 | 7 | Thu Aug 27 | Full spine on emulators, CI lanes complete, clean-project deploy test | — |
-| 8 | Fri Aug 28 | Live dress rehearsal + rough-cut recording | **Freeze `main`, tag `v1.1-demo` (DFT-4)** |
+| 8 | Fri Aug 28 | Live dress rehearsal + rough-cut recording | **Freeze `main`, tag `v1.2-demo` (DFT-4)** |
 | 9 | Sat Aug 29 | CI-8 acceptance (10/10), final video, README/disclosures | **CI-8 before recording** |
 | 10 | Sun Aug 30 | Submission assembly; submit by evening | **SUB-7 with ~20 h margin** |
 | — | Mon Aug 31 | Pure buffer; edit/resubmit window only | Deadline 5:00 PM PT |
@@ -61,12 +61,12 @@ Approval surface behind Cloud Run IAM/IAP; approver identity from the authentica
 **Exit: gated transition blocked before approval, succeeds after, on deployed infra. END OF DAY: Gemma integrated → keep; else flip SEC-3 to `gemini-3.5-flash` permanently and forfeit the bonus (PLT-5). Decision is final either way — no revisiting.**
 
 ### Day 7 — Thu Aug 27 · Full Spine + CI Complete
-Demo spine steps 1–8 end-to-end on emulators with stubbed models — the CI-4 drift tripwire with all five explicit assertions (HUM-1 gate, SEC-4 isolation, ICD-5/6 idempotency, ORC-3/4 single reassignment, AUD-2 reconstruction). Time-skip scene: Logical Clock +10 days, due event double-fired, unattended resume, halt at `AWAITING_RELEASE_APPROVAL`, `RELEASED` requires second approval (ORC-5, Spine 7). Lane 2: Workload Identity Federation deploy + live-Gemini smoke of one agent round-trip and one Pub/Sub publish/consume (CI-6). Dead-code gate with reviewed allowlist (CI-5). Clean-project deployment test (PLT-6 verify). Traceability complete and CI-enforced: every requirement mapped, every module referenced (DFT-1); manifest checked against deploy config (DFT-5).
+Demo spine steps 1–8 end-to-end on emulators with stubbed models — the CI-4 drift tripwire with all five explicit assertions (HUM-1 gate, SEC-4 isolation, ICD-5/6 idempotency, ORC-3/4 single reassignment, AUD-2 reconstruction). Time-skip scene: Logical Clock +21 days, due event double-fired, unattended resume, halt at `AWAITING_RELEASE_APPROVAL`, `RELEASED` requires second approval (ORC-5, Spine 7). Lane 2: Workload Identity Federation deploy + live-Gemini smoke of one agent round-trip and one Pub/Sub publish/consume (CI-6). Dead-code gate with reviewed allowlist (CI-5). Clean-project deployment test (PLT-6 verify). Traceability complete and CI-enforced: every requirement mapped, every module referenced (DFT-1); manifest checked against deploy config (DFT-5).
 **Exit: all three CI lane-1 gates + CI-4 green; clean-project deploy documented; traceability passing.**
 
 ### Day 8 — Fri Aug 28 · Dress Rehearsal · **FREEZE**
 Full spine on deployed infrastructure with live Gemini; fix defects on sight. Dress-rehearsal recording (rough cut) — validates the ≤4-minute pacing across Scenes 1–4 + closing audit shot. Architecture diagram drawn from `architecture/manifest.yaml` (SUB-2, DFT-5). Script the final video: problem → value proposition → live scenes → GCP console proof.
-**Exit: END OF DAY freeze `main`, tag `v1.1-demo` (DFT-4). Thereafter demo-spine defects only.**
+**Exit: END OF DAY freeze `main`, tag `v1.2-demo` (DFT-4). Thereafter demo-spine defects only.**
 
 ### Day 9 — Sat Aug 29 · Acceptance & Final Video
 CI-8: 10 consecutive clean spine runs on deployed infrastructure with live models — required before final recording (ORC-4 verify rides on this). Record and edit the final video ≤4 min with visible Google Cloud Console proof (SUB-1); upload public YouTube/Vimeo. README: reproducible spin-up, judge access procedure if anything is private (SUB-3); clean statement — no CALM-CFR+, no controlled information, no real platforms/TOs/identifiers (SUB-5). `PREEXISTING_WORK.md`: Conway Effect pilot, AI assistants used, reused assets + licenses (SUB-4). Draft Devpost text description.
@@ -135,7 +135,7 @@ No planned work. Devpost edit/resubmit window only, closes 5:00 PM PT.
 
 ## 7. Session Protocol (standing, every build session)
 
-Each AI-assisted session starts pointed at FORGE-REQUIREMENTS.md v1.1.2 (DFT-2). All changes land as PRs — never direct to `main`. New dependencies carry a one-line justification in the PR description (DFT-3). Work not traceable to a requirement ID is rejected in review, not merged and cleaned up later. After the Day-8 freeze, only demo-spine defects merge (DFT-4).
+Each AI-assisted session starts pointed at FORGE-REQUIREMENTS.md v1.2 (DFT-2). All changes land as PRs — never direct to `main`. New dependencies carry a one-line justification in the PR description (DFT-3). Work not traceable to a requirement ID is rejected in review, not merged and cleaned up later. After the Day-8 freeze, only demo-spine defects merge (DFT-4).
 
 ## 8. Plan Change Log
 
