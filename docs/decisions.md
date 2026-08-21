@@ -120,3 +120,15 @@ callback. Both closed, plus five confirmed findings:
   and outbox messages are contract-validated and workflow-pinned.
 - Governance drift fixed: build plan → v1.2 / 21 days / `v1.2-demo`;
   traceability message-schema refs → `.v2`.
+
+## 2026-08-22 — Corrections to earlier entries (v1.2 supersessions)
+
+Two statements in the Day-1 entry are superseded and should not be relied on:
+- "region `us-central1`" for the model: `gemini-3.5-flash` runs at the `us`
+  multi-region per the DAT-1 residency map (`infra/residency.yaml`);
+  `us-central1` remains correct for Cloud Run/Firestore/Pub/Sub/Model Armor.
+- "the envelope carries the six mandatory ICD-4 fields": the active envelope
+  is v2 with EIGHT fields (adds `data_origin`, `trust_state`; `trace_id` is
+  the 32-hex OTel mirror).
+Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
+— live GCP verification is scheduled Day 6–7 (Lane 2, CI-6).

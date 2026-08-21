@@ -89,7 +89,12 @@ Day 1 (Fri Aug 21) complete. Day 2 core merged (PR #2) and VERIFIED via the
 emulator gate (PR #3): contracts, CI Lane 1, traceability, GCP bootstrap,
 (envelope/messages at v2, `agents/registry.yaml`, `infra/residency.yaml`,
 `PREEXISTING_WORK.md`, traceability extended with REG/OBS/DAT/CI-9/SUB-8).
-Still Day 1: GCP bootstrap + Vertex/Model Armor smoke calls (R2). Day 2+ must
+GCP bootstrap DONE Aug 21: project `forge-agentic-0821-6418`, billing linked,
+APIs enabled, Firestore native at us-central1; BOTH smoke tests PASSED
+(Vertex `gemini-3.5-flash` at the `us` multi-region; Model Armor screening
+returned MATCH_FOUND/HIGH on the injection probe). Emulator-verified is NOT
+deployment-verified: live Cloud Run/IAM/Pub/Sub-regional/DLQ-forwarding/
+Cloud Trace verification lands Day 6–7 (Lane 2, CI-6). Day 2+ must
 also build: the registry loader + Firestore instance records (REG-1/2), OTel
 init + traceparent propagation (OBS-1), and the CI-9 config gate.
 **Day 2 (Sat Aug 22):** Firestore

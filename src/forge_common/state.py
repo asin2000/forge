@@ -70,6 +70,8 @@ def record_approval_decision(db: Any, message: dict[str, Any]) -> str:
     """
     if validate_message(message) != "approval_decision.v2":
         raise GateBlocked("only approval_decision.v2 may be recorded (HUM-1)")
+    if message["envelope"]["trust_state"] != "TRUSTED":
+        raise GateBlocked("approval records must carry trust_state TRUSTED (DAT-2)")
     payload = message["payload"]
     workflow_id = message["envelope"]["workflow_id"]
 
@@ -78,10 +80,26 @@ def record_approval_decision(db: Any, message: dict[str, Any]) -> str:
         # begin on the real client. Also an explicit duplicate check.
         if layout.txn_get_dict(txn, layout.approval_ref(db, workflow_id, payload["approval_id"])):
             raise GateBlocked(f"approval {payload['approval_id']} already recorded (HUM-1)")
+        clock_doc = layout.txn_get_dict(txn, layout.clock_ref(db))
+        # AUD-1: the recording itself is audited in the same transaction — a
+        # REJECTED decision that never causes a transition still appears in
+        # the trail, with the full evidence verbatim.
+        audit = build_audit_event(
+            workflow_id=workflow_id,
+            trace_id=message["envelope"]["trace_id"],
+            agent_identity="forge-approval-surface",
+            event_kind="approval",
+            reason_code="APPROVAL_RECORDED",
+            input_obj=payload,
+            output_obj={"recorded": True},
+            effective_at=int(clock_doc["logical_time"]) if clock_doc else 0,
+            detail=json.dumps({"approval": payload}),
+        )
         txn.create(
             layout.approval_ref(db, workflow_id, payload["approval_id"]),
             {"message": message, "recorded_observed_at": now_iso()},
         )
+        txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
 
     layout.run_in_transaction(db, _record)
     return payload["approval_id"]
