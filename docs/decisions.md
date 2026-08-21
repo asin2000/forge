@@ -177,3 +177,25 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
 - **Orchestrator exhaustion bounded**: after AGT-7's limit →
   ORCHESTRATOR_REASONING_EXHAUSTED escalation + BLOCKED (recovery via
   BLOCKED → PLANNING), not a NACK loop.
+
+## 2026-08-24 — Day 4: repair loop, monitoring, data-backed domain facts
+
+- **Domain facts come from data, never the model.** `/data/*.yaml`
+  (approved parts, qualifications, procedures) + `synthetic_data.py`;
+  `StructuredAgent.run(payload_check=...)` refuses outputs contradicting
+  the data (retry → agent_failure_event, failure_kind contract_violation).
+  Supply approval, Workforce qualifications (no waivers), and Safety
+  verdicts are all data-verified; prompts are grounded with registry
+  excerpts (supply prompt bumped to v2).
+- **Repair loop (ORC-3).** Failure-event handler: workforce → reassignment
+  via TxnWrites.reassignments — ownership transfer, instance flips
+  (FAILED/ACTIVE), reassignment audit, and the seq-2 assignment commit in
+  ONE transaction; the ownership guard makes the transfer exactly-once
+  under double-fired failure events. Other roles → BLOCKED + escalation
+  (ORC-4 disposition). Reserve located via registry (state RESERVE only).
+- **Monitoring (ORC-4).** `monitor.run_monitoring_cycle` (5s demo cycle):
+  stale ASSIGNED work packages synthesize deterministic timeout
+  agent_failure_events into the outbox (idempotent across cycles);
+  malformed/contract failures are emitted at the source by StructuredAgent.
+- Riders: REG-2 negative race + full repair loop proven on the REAL
+  Firestore emulator; ADK smoke artifact now carries exact captured stdout.

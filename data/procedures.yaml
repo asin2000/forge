@@ -1,0 +1,9 @@
+# Synthetic safety & policy procedures library (AGT-4).
+rules:
+  - rule_ref: SP-PART-001
+    description: Only parts in the approved-parts registry may be installed.
+  - rule_ref: SP-QUAL-001
+    description: Every task must be executed by a technician holding the task-code qualification.
+  - rule_ref: SP-HRS-002
+    description: A single maintenance task may not exceed 24 estimated hours.
+    max_est_hours: 24

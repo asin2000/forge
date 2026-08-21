@@ -21,7 +21,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from forge_common import registry
+from forge_common import layout, registry
 from forge_common.agent_base import (
     AdkTextRunner,
     AgentOutputMalformed,
@@ -184,6 +184,7 @@ def make_nmc_handler(db: Any, *, model: Any):
                     "work_package_id": assignment["envelope"]["work_package_id"],
                     "instance_id": instance_id,
                     "role": role,
+                    "objective": decomposition["objectives"][role],
                 }
             )
         writes.transition = {
@@ -195,3 +196,123 @@ def make_nmc_handler(db: Any, *, model: Any):
         }
 
     return handle
+
+
+def make_failure_handler(db: Any):
+    """Handler for agent_failure_event.v2 (ORC-3/ORC-4 dispositions).
+
+    Workforce failures reassign to the held reserve: ownership transfer,
+    instance state flips, the reassignment audit event, and the seq-2
+    assignment all commit in ONE transaction (ORC-3, atomically, exactly
+    once — a double-fired failure event is skipped by the ownership guard).
+    Failures of any other role place the workflow in BLOCKED_AGENT_FAILURE
+    with an audited escalation (ORC-4).
+    """
+
+    def handle(message: dict[str, Any], writes: TxnWrites) -> None:
+        envelope = message["envelope"]
+        payload = message["payload"]
+        workflow_id = envelope["workflow_id"]
+        trace_id = envelope["trace_id"]
+        role = payload["role"]
+        work_package_id = envelope["work_package_id"]
+        if role != "workforce":
+            _make_escalation(
+                db,
+                writes,
+                workflow_id=workflow_id,
+                trace_id=trace_id,
+                reason_code="SPECIALIST_FAILURE_NO_RESERVE",
+                payload=payload,
+                error=(
+                    f"{payload['agent_id']} failed ({payload['failure_kind']}); "
+                    f"role {role} holds no reserve (ORC-4)"
+                ),
+            )
+            return
+        reserve = registry.find_reserve_instance(db, "workforce")
+        if reserve is None:
+            _make_escalation(
+                db,
+                writes,
+                workflow_id=workflow_id,
+                trace_id=trace_id,
+                reason_code="RESERVE_UNAVAILABLE",
+                payload=payload,
+                error="workforce reserve is not available (ORC-3)",
+            )
+            return
+        snapshot = layout.work_package_ref(db, workflow_id, work_package_id).get()
+        wp = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+        objective = (wp or {}).get("objective") or "Re-execute the failed work package."
+        seq = int((wp or {}).get("assignment_seq", 1)) + 1
+        writes.reassignments.append(
+            {
+                "work_package_id": work_package_id,
+                "failed_instance_id": payload["agent_id"],
+                "reserve_instance_id": reserve["instance_id"],
+            }
+        )
+        reassignment = build_assignment(
+            workflow_id=workflow_id,
+            trace_id=trace_id,
+            role="workforce",
+            objective=objective,
+            instance_id=reserve["instance_id"],
+            inputs=(wp or {}).get("inputs", {}),
+            assignment_seq=seq,
+        )
+        reassignment["payload"]["reassigned_from"] = payload["agent_id"]
+        validate_message(reassignment)
+        writes.outbox_messages.append(reassignment)
+        writes.audit_events.append(
+            build_audit_event(
+                workflow_id=workflow_id,
+                trace_id=trace_id,
+                agent_identity=ORCHESTRATOR_IDENTITY,
+                event_kind="reassignment",
+                reason_code="WORKFORCE_RESERVE_DEPLOYED",
+                input_obj=payload,
+                output_obj={
+                    "work_package_id": work_package_id,
+                    "from": payload["agent_id"],
+                    "to": reserve["instance_id"],
+                    "assignment_seq": seq,
+                },
+                effective_at=read_clock(db),
+                work_package_id=work_package_id,
+            )
+        )
+
+    return handle
+
+
+def _make_escalation(
+    db: Any,
+    writes: TxnWrites,
+    *,
+    workflow_id: str,
+    trace_id: str,
+    reason_code: str,
+    payload: dict[str, Any],
+    error: str,
+) -> None:
+    writes.transition = {
+        "target": "BLOCKED_AGENT_FAILURE",
+        "agent_identity": ORCHESTRATOR_IDENTITY,
+        "trace_id": trace_id,
+        "reason_code": reason_code,
+        "detail": error[:1000],
+    }
+    writes.audit_events.append(
+        build_audit_event(
+            workflow_id=workflow_id,
+            trace_id=trace_id,
+            agent_identity=ORCHESTRATOR_IDENTITY,
+            event_kind="escalation",
+            reason_code=reason_code,
+            input_obj=payload,
+            output_obj={"error": error},
+            effective_at=read_clock(db),
+        )
+    )

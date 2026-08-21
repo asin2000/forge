@@ -1,0 +1,14 @@
+# Synthetic approved-parts registry (SUB-5: all data synthetic).
+# Source of truth for AGT-2 (Supply may not approve substitutions) and
+# AGT-4/SEC-4 (Safety rejects identifiers not in this registry).
+# The spine's vendor substitute VND-ACT-9901 is deliberately ABSENT.
+parts:
+  - part_number: HYD-ACT-4402
+    description: Hydraulic actuator, GX-12 lift assembly
+    applicable_discrepancies: [DSC-0042]
+  - part_number: HYD-SEAL-1108
+    description: Actuator seal kit
+    applicable_discrepancies: [DSC-0042, DSC-0107]
+  - part_number: ELEC-HARN-2210
+    description: Boom electrical harness
+    applicable_discrepancies: [DSC-0311]

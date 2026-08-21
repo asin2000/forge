@@ -144,6 +144,7 @@ class StructuredAgent:
         workflow_id: str,
         work_package_id: str,
         trace_id: str,
+        payload_check: Any = None,
     ) -> dict[str, Any]:
         """Produce ONE contract-valid bus message (or a failure event).
 
@@ -156,6 +157,7 @@ class StructuredAgent:
         prompt = load_prompt(prompt_file, variables)
         attempts = 0
         last_error = ""
+        failure_kind = "malformed_after_retries"
         while attempts <= MAX_RETRIES:
             attempts += 1
             raw = self._runner(prompt)
@@ -172,16 +174,28 @@ class StructuredAgent:
                     attempt=attempts,
                 )
                 validate_message(message)
+                if payload_check is not None:
+                    # Data-backed constraints (approved parts, qualification
+                    # records, procedure rules): a model output contradicting
+                    # the synthetic data sources is a violation, never
+                    # published (AGT-2/AGT-3/AGT-4 boundaries).
+                    data_errors = payload_check(payload)
+                    if data_errors:
+                        failure_kind = "contract_violation"
+                        last_error = "data check failed: " + "; ".join(data_errors[:3])
+                        continue
                 return message
             except (json.JSONDecodeError, ValueError) as exc:
                 last_error = f"unparseable model output: {exc}"
+                failure_kind = "malformed_after_retries"
             except ContractViolation as exc:
                 last_error = f"contract violation: {exc}"
+                failure_kind = "malformed_after_retries"
         failure = self._wrap(
             {
                 "role": self.role,
                 "agent_id": self.agent_id,
-                "failure_kind": "malformed_after_retries",
+                "failure_kind": failure_kind,
                 "attempts": attempts,
                 "detail": last_error[:1000],
                 "detected_at": now_iso(),

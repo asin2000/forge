@@ -29,8 +29,15 @@ def make_work_package_handler(
     model: Any,
     prompt_file: str,
     output_schema_version: str,
+    payload_check_factory: Any = None,
+    variables_factory: Any = None,
 ):
-    """Build a bus handler for one specialist role."""
+    """Build a bus handler for one specialist role.
+
+    ``payload_check_factory(assignment_payload)`` returns the data-backed
+    check applied to the model's output; ``variables_factory`` may add
+    grounding context (e.g. an approved-parts excerpt) to the prompt.
+    """
 
     def handle(message: dict[str, Any], writes: TxnWrites) -> None:
         payload = message["payload"]
@@ -39,13 +46,19 @@ def make_work_package_handler(
         envelope = message["envelope"]
         agent_id = payload["assigned_agent_id"]
         agent = StructuredAgent(agent_id=agent_id, role=role, model=model)
+        variables = {**payload.get("inputs", {}), "objective": payload["objective"]}
+        if variables_factory is not None:
+            variables.update(variables_factory(payload))
         result = agent.run(
             prompt_file=prompt_file,
-            variables={**payload.get("inputs", {}), "objective": payload["objective"]},
+            variables=variables,
             schema_version=output_schema_version,
             workflow_id=envelope["workflow_id"],
             work_package_id=envelope["work_package_id"],
             trace_id=envelope["trace_id"],
+            payload_check=(
+                payload_check_factory(payload) if payload_check_factory is not None else None
+            ),
         )
         writes.outbox_messages.append(result)
         failed = result["envelope"]["schema_version"] == "agent_failure_event.v2"
