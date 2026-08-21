@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:quarantine_verdict.v3",
+  "title": "Cyber Trust quarantine verdict",
+  "description": "Cyber Trust screening verdict (SEC-1..SEC-4). v3 separates three orthogonal facts the v2 'released' boolean conflated: screening_complete (all three stages executed without error, SEC-2), raw_disposition (the raw document's fate \u2014 always 'quarantined'; raw content never reaches the bus, SEC-4), and metadata_release (whether typed extracted metadata is published for downstream evaluation against trusted registries \u2014 such metadata is UNTRUSTED input to consumers, never an approval). Traceability: SEC-1..SEC-4, AGT-5. All data synthetic (SUB-5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v2.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "quarantine_verdict.v3"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_ref",
+        "screening",
+        "screening_complete",
+        "raw_disposition",
+        "metadata_release"
+      ],
+      "properties": {
+        "document_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "quarantine_uri",
+            "sha256"
+          ],
+          "properties": {
+            "quarantine_uri": {
+              "type": "string",
+              "pattern": "^gs://[a-z0-9._-]+/quarantine/[A-Za-z0-9._/-]+$"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "screening": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "parser_ok",
+            "model_armor",
+            "classifier"
+          ],
+          "properties": {
+            "parser_ok": {
+              "type": "boolean"
+            },
+            "model_armor": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "verdict"
+              ],
+              "properties": {
+                "verdict": {
+                  "enum": [
+                    "clean",
+                    "flagged"
+                  ]
+                },
+                "categories": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z_]{2,40}$"
+                  }
+                }
+              }
+            },
+            "classifier": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "model_id",
+                "confidence"
+              ],
+              "properties": {
+                "label": {
+                  "enum": [
+                    "benign",
+                    "suspicious",
+                    "malicious"
+                  ]
+                },
+                "model_id": {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            }
+          }
+        },
+        "safe_metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "candidate_part_identifier": {
+              "type": "string",
+              "pattern": "^[A-Z0-9][A-Z0-9-]{3,31}$"
+            },
+            "vendor_name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9 .,&'-]{2,80}$"
+            },
+            "document_date": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          "description": "Typed, bounded metadata extracted by the bounded parser/classifier. UNTRUSTED: consumers evaluate identifiers against trusted registries, never the source document."
+        },
+        "screening_complete": {
+          "type": "boolean",
+          "description": "True only when parser, Model Armor, and classifier ALL completed without error (SEC-1/SEC-2)."
+        },
+        "raw_disposition": {
+          "enum": [
+            "quarantined"
+          ],
+          "description": "The raw document never leaves quarantine (SEC-4)."
+        },
+        "metadata_release": {
+          "enum": [
+            "released",
+            "withheld"
+          ],
+          "description": "Whether typed extracted metadata accompanies this verdict. Released metadata is UNTRUSTED and must be evaluated against trusted registries."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "metadata_release": {
+                "const": "withheld"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "safe_metadata"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "screening_complete": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "metadata_release": {
+                "const": "withheld"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

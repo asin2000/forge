@@ -14,11 +14,13 @@ bounded parser actually extracted). The raw document never leaves the
 quarantine store (SEC-4); downstream agents evaluate the identifier against
 the trusted approved-parts registry, never the source text.
 
-``released`` semantics (documented interpretation of the frozen contract):
-True when the screening PIPELINE completed without error (SEC-2) — a
-flagged/malicious result still publishes with ``released: true`` so Safety
-can reject the identifier (spine Scene 1); the flag rides in ``screening``.
-``released: false`` (errors) forbids safe_metadata by contract.
+The v3 verdict states three facts separately: ``screening_complete`` (all
+stages executed without error, SEC-2), ``raw_disposition: quarantined``
+(the raw document never leaves quarantine, SEC-4), and
+``metadata_release`` (typed extracted metadata published for downstream
+evaluation — UNTRUSTED input, never an approval). Scene 1 therefore reads:
+screening complete, raw quarantined, candidate identifier released as
+untrusted metadata, Safety veto binding.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from forge_common.messages import build_envelope, deterministic_event_id
 from forge_common.quarantine import (
     STATUS_QUARANTINED,
     STATUS_SCREENED,
-    FirestoreQuarantineStore,
+    QuarantineConflict,
     quarantine_ref,
 )
 
@@ -52,6 +54,14 @@ CYBER_TRUST_IDENTITY = "forge-cyber-trust"
 #: Bounded parser limits (SEC-1: bounded, deterministic, no model).
 MAX_DOCUMENT_CHARS = 20_000
 _IDENTIFIER_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,7}(?:-[A-Z0-9]{2,8}){1,3}\b")
+
+
+def _neutralize_markers(text: str) -> str:
+    """A document containing the prompt's BEGIN/END markers cannot escape
+    the untrusted block: marker strings are neutralized before insertion."""
+    for marker in ("BEGIN UNTRUSTED DOCUMENT", "END UNTRUSTED DOCUMENT"):
+        text = text.replace(marker, "[NEUTRALIZED-MARKER]")
+    return text
 
 
 class ScreeningError(Exception):
@@ -94,7 +104,7 @@ def _classifier_validator(identifiers: list[str]) -> Draft202012Validator:
 
 def screen_document(
     db: Any,
-    store: FirestoreQuarantineStore,
+    store: Any,
     doc_id: str,
     *,
     armor: Any,
@@ -149,9 +159,11 @@ def screen_document(
 
         layout.run_in_transaction(db, _write)
 
-    # SEC-1: parser, Model Armor, classifier — all three, in order.
+    # SEC-1: parser, Model Armor, classifier — all three, in order. The raw
+    # bytes come from the store's raw channel (GCS object in production —
+    # metadata never carries raw_text).
     try:
-        parsed = bounded_parse(record["raw_text"])
+        parsed = bounded_parse(store.read_raw(doc_id))
         armor_result = armor(parsed["text"])
         if armor_result.get("verdict") not in ("clean", "flagged"):
             raise ScreeningError(f"unusable Model Armor result: {armor_result!r}")
@@ -160,14 +172,20 @@ def screen_document(
             load_prompt(
                 "cyber_trust_classifier.v1.md",
                 {
-                    "document_text": parsed["text"],
+                    "document_text": _neutralize_markers(parsed["text"]),
                     "extracted_identifiers": ", ".join(parsed["identifiers"]) or "(none)",
                 },
             ),
             _classifier_validator(parsed["identifiers"]),
         )
-    except (ScreeningError, AgentOutputMalformed, Exception) as exc:  # noqa: BLE001
-        _fail_closed(f"{type(exc).__name__}: {exc}")
+    except AgentOutputMalformed as exc:
+        _fail_closed(f"classifier exhausted: {exc}")
+        return None
+    except ScreeningError as exc:
+        _fail_closed(str(exc))
+        return None
+    except Exception as exc:  # SEC-2: ANY unexpected error fails closed
+        _fail_closed(f"unexpected {type(exc).__name__}: {exc}")
         return None
 
     payload: dict[str, Any] = {
@@ -187,16 +205,19 @@ def screen_document(
                 "confidence": classification["confidence"],
             },
         },
-        "released": True,
+        "screening_complete": True,
+        "raw_disposition": "quarantined",
+        "metadata_release": "withheld",
     }
     candidate = classification.get("candidate_part_identifier")
     if candidate:
+        payload["metadata_release"] = "released"
         payload["safe_metadata"] = {"candidate_part_identifier": candidate}
     event_id = deterministic_event_id("verdict", workflow_id, doc_id)
     verdict = {
         "envelope": build_envelope(
             workflow_id=workflow_id,
-            schema_version="quarantine_verdict.v2",
+            schema_version="quarantine_verdict.v3",
             event_id=event_id,
             trace_id=trace_id,
             idempotency_key=f"idem-verdict-{doc_id}"[:128],
@@ -235,7 +256,7 @@ def screen_document(
 
 def ingest_document(
     db: Any,
-    store: FirestoreQuarantineStore,
+    store: Any,
     *,
     workflow_id: str,
     doc_id: str,
@@ -244,8 +265,38 @@ def ingest_document(
     trace_id: str,
 ) -> dict[str, Any]:
     """SEC-1: the external document enters quarantine FIRST, audited. The
-    raw text goes nowhere else."""
-    record = store.put(doc_id=doc_id, workflow_id=workflow_id, raw_text=raw_text, source=source)
+    raw text goes nowhere else.
+
+    Identical re-ingest is idempotent (returns the STORED record, no
+    duplicate audit); a doc_id reused with different bytes, workflow, or
+    source is REJECTED with an audited REINGEST_CONFLICT — one document ID
+    can never audit one document while screening another.
+    """
+    try:
+        record, created = store.put(
+            doc_id=doc_id, workflow_id=workflow_id, raw_text=raw_text, source=source
+        )
+    except QuarantineConflict as exc:
+        conflict_audit = build_audit_event(
+            workflow_id=workflow_id,
+            trace_id=trace_id,
+            agent_identity=CYBER_TRUST_AGENT,
+            event_kind="blocked_action",
+            reason_code="REINGEST_CONFLICT",
+            input_obj={"doc_id": doc_id, "source": source},
+            output_obj={"error": str(exc)[:500]},
+            effective_at=read_clock(db),
+        )
+
+        def _conflict(txn: Any) -> None:
+            ref = layout.audit_ref(db, workflow_id, conflict_audit["envelope"]["event_id"])
+            if not layout.txn_get_dict(txn, ref):
+                txn.create(ref, conflict_audit)
+
+        layout.run_in_transaction(db, _conflict)
+        raise
+    if not created:
+        return record  # idempotent re-ingest: already audited on first entry
     audit = build_audit_event(
         workflow_id=workflow_id,
         trace_id=trace_id,

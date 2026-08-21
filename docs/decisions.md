@@ -270,3 +270,39 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   (candidate evaluated against the trusted registry, never the document).
 - Model Armor adapter mirrors the proven smoke REST call; live exercised by
   the smoke + Lane 2 (CI-6); unit/emulator stub it.
+
+## 2026-08-25 — Day 5 corrective (entrant HOLD)
+
+- **Model Armor fail-closed for real**: invocationResult PARTIAL/FAILURE,
+  missing fields, malformed JSON, transport/timeout/auth failures all
+  RAISE; ADC replaces the gcloud shell-out (Cloud Run service identity);
+  injectable transport/token for the 8-shape test matrix. Live bug found
+  during the fix: category matching used a substring test that also matched
+  NO_MATCH_FOUND — now an exact-value walk; verdict flags on aggregate OR
+  any per-filter match.
+- **Live defense-in-depth finding** (captured in verification): the
+  injection diluted in benign vendor prose evades the armor filter even at
+  LOW_AND_ABOVE, while the pure probe flags — and the LIVE gemini
+  classifier catches the dilution (malicious, 1.0, candidate
+  VND-ACT-9901). This is the Scene-1 narrative, proven live.
+- **quarantine_verdict.v3**: separates screening_complete /
+  raw_disposition(quarantined) / metadata_release(released|withheld) —
+  no more released:true beside malicious; schema conditionals enforce
+  withheld-forbids-metadata and incomplete-forces-withheld.
+- **Trusted discrepancy context**: Safety resolves the workflow discrepancy
+  from orchestrator-written work-package records ONLY (wp-none falls back
+  to scanning the workflow's packages); part checks are STRICT — no
+  discrepancy context is itself an SP-PART-001 violation, never a global
+  fallback (the wrong-discrepancy hole is closed on the quarantine path).
+- **GCS quarantine store is real**: raw bytes live in the bucket
+  (gs://forge-quarantine-<project>, created; live put/read round-trip
+  captured); Firestore metadata NEVER carries raw_text;
+  FirestoreQuarantineStore is emulator-only. Per-SA IAM negative test lands
+  with the deployed identities (Day 6/7, Lane 2). New dependency (DFT-3):
+  google-cloud-storage — SEC-1 quarantine object storage.
+- **Re-ingest integrity**: identical re-ingest idempotent (returns the
+  STORED record); hash/workflow/source mismatch -> QuarantineConflict +
+  REINGEST_CONFLICT audit.
+- Riders: clear exception boundary (AgentOutputMalformed / ScreeningError /
+  unexpected — all fail closed); prompt BEGIN/END markers neutralized in
+  document text (escape test); count corrected per entrant: 135 was right.

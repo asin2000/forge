@@ -282,6 +282,7 @@ def plan_message(parts):
 
 def test_safety_approves_compliant_plan():
     db = ready_db()
+    claim_package(db, "maintenance")  # trusted discrepancy context (DSC-0042)
     plan = plan_message(["HYD-ACT-4402"])
     verdict_stub = stub_json(
         {

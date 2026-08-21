@@ -60,12 +60,28 @@ def procedures() -> dict[str, dict[str, Any]]:
     return {r["rule_ref"]: r for r in doc["rules"]}
 
 
-def _part_ok(part_number: str, discrepancy_code: str | None) -> bool:
-    """Discrepancy-specific when context is known; global membership only as
-    the fallback when no workflow discrepancy is available."""
-    if discrepancy_code:
-        return is_part_approved_for(part_number, discrepancy_code)
-    return is_part_approved(part_number)
+def _part_check(
+    part_number: str, discrepancy_code: str | None, context: str
+) -> list[tuple[str, str]]:
+    """STRICT discrepancy-specific approval (AGT-2/AGT-4): without trusted
+    workflow discrepancy context the part CANNOT be validated — that is a
+    violation, never a fallback to global registry membership (a part
+    approved for another discrepancy must not pass)."""
+    if not discrepancy_code:
+        return [
+            (
+                "SP-PART-001",
+                f"no trusted workflow discrepancy context to validate {part_number} ({context})",
+            )
+        ]
+    if not is_part_approved_for(part_number, discrepancy_code):
+        return [
+            (
+                "SP-PART-001",
+                f"{context}: {part_number} is not approved for {discrepancy_code}",
+            )
+        ]
+    return []
 
 
 def plan_violations(
@@ -80,15 +96,7 @@ def plan_violations(
     max_hours = procedures()["SP-HRS-002"].get("max_est_hours", 24)
     for task in plan_payload.get("tasks", []):
         for part in task.get("parts_required", []):
-            if not _part_ok(part["part_number"], discrepancy_code):
-                violations.append(
-                    (
-                        "SP-PART-001",
-                        f"part {part['part_number']} is not approved"
-                        + (f" for {discrepancy_code}" if discrepancy_code else "")
-                        + " in the approved-parts registry",
-                    )
-                )
+            violations += _part_check(part["part_number"], discrepancy_code, "plan part")
         if task.get("est_hours", 0) > max_hours:
             violations.append(
                 (
@@ -120,19 +128,9 @@ def sourcing_violations(
     """Data-backed safety check of a sourcing report (AGT-4): approval must
     hold FOR THIS DISCREPANCY (sourcing_report.v3 semantics)."""
     violations: list[tuple[str, str]] = []
-    if report_payload.get("part_approved") and not _part_ok(
-        report_payload.get("part_number", ""), discrepancy_code
-    ):
-        violations.append(
-            (
-                "SP-PART-001",
-                f"sourcing report claims approval for {report_payload.get('part_number')}"
-                + (
-                    f", not approved for {discrepancy_code}"
-                    if discrepancy_code
-                    else " (unregistered)"
-                ),
-            )
+    if report_payload.get("part_approved"):
+        violations += _part_check(
+            report_payload.get("part_number", ""), discrepancy_code, "sourcing approval"
         )
     return violations
 
@@ -164,7 +162,7 @@ def verdict_violations(
     never the source document; flagged/unreleased content cannot drive
     actions (SP-SEC-004)."""
     violations: list[tuple[str, str]] = []
-    if not verdict_payload.get("released"):
+    if not verdict_payload.get("screening_complete"):
         return [("SP-SEC-004", "screening did not complete; content remains quarantined")]
     screening = verdict_payload.get("screening", {})
     if (
@@ -178,13 +176,6 @@ def verdict_violations(
             )
         )
     candidate = verdict_payload.get("safe_metadata", {}).get("candidate_part_identifier")
-    if candidate and not _part_ok(candidate, discrepancy_code):
-        violations.append(
-            (
-                "SP-PART-001",
-                f"candidate part {candidate} is not approved"
-                + (f" for {discrepancy_code}" if discrepancy_code else "")
-                + " in the approved-parts registry",
-            )
-        )
+    if candidate:
+        violations += _part_check(candidate, discrepancy_code, "candidate part")
     return violations

@@ -109,6 +109,7 @@ requirements:
       - src/forge_common/quarantine.py
       - services/cyber_trust/handlers.py
     verified_by:
+      - scripts/smoke_quarantine_live.py
       - tests/test_day5_quarantine.py
       - tests/emulator/test_emulator_integration.py
     verification_method: test
@@ -255,7 +256,8 @@ requirements:
       - services/cyber_trust/model_armor.py
     verified_by:
       - scripts/smoke_model_armor.py
-      - pending
+      - scripts/smoke_quarantine_live.py
+      - tests/test_day5_quarantine.py
     verification_method: test
   PLT-5:
     implemented_by:

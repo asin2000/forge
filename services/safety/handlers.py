@@ -31,8 +31,28 @@ VALIDATORS = {
     "maintenance_action_plan.v2": synthetic_data.plan_violations,
     "sourcing_report.v3": synthetic_data.sourcing_violations,
     "roster_assignment.v2": synthetic_data.roster_violations,
-    "quarantine_verdict.v2": synthetic_data.verdict_violations,
+    "quarantine_verdict.v3": synthetic_data.verdict_violations,
 }
+
+
+def _trusted_discrepancy(db: Any, workflow_id: str, work_package_id: str) -> str | None:
+    """The workflow's discrepancy from TRUSTED records only — the
+    orchestrator-written work-package inputs (validated NMC event), NEVER
+    context supplied by the reviewed document. Falls back to any work
+    package of the workflow when the message is workflow-scoped (wp-none,
+    e.g. quarantine verdicts)."""
+    snapshot = layout.work_package_ref(db, workflow_id, work_package_id).get()
+    wp = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+    discrepancy = (wp or {}).get("inputs", {}).get("discrepancy_code")
+    if discrepancy:
+        return discrepancy
+    packages = layout.workflow_ref(db, workflow_id).collection("work_packages")
+    for candidate in packages.stream():
+        doc = candidate.to_dict() if hasattr(candidate, "to_dict") else candidate
+        discrepancy = (doc or {}).get("inputs", {}).get("discrepancy_code")
+        if discrepancy:
+            return discrepancy
+    return None
 
 
 def make_validation_handler(db: Any, model: Any):
@@ -44,11 +64,7 @@ def make_validation_handler(db: Any, model: Any):
         if engine is None:
             return  # not a proposed action; consumption recorded, no verdict
         plan = message["payload"]
-        wp_snapshot = layout.work_package_ref(
-            db, envelope["workflow_id"], envelope["work_package_id"]
-        ).get()
-        wp = wp_snapshot.to_dict() if hasattr(wp_snapshot, "to_dict") else wp_snapshot
-        discrepancy = (wp or {}).get("inputs", {}).get("discrepancy_code")
+        discrepancy = _trusted_discrepancy(db, envelope["workflow_id"], envelope["work_package_id"])
         violations = engine(plan, discrepancy_code=discrepancy)
 
         def check(payload: dict[str, Any]) -> list[str]:
