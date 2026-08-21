@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:validation_verdict.v2",
+  "title": "Safety & Policy validation verdict",
+  "description": "Safety Agent verdict on a proposed action, validated against the synthetic procedures library. A veto is not human-overridable (AGT-4). Traceability: AGT-4. All data synthetic (SUB-5). (v2: envelope.v2 per DAT-2/OBS-1; payload unchanged from v1.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v2.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "validation_verdict.v2"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject_event_id",
+        "verdict",
+        "rule_refs",
+        "reasons"
+      ],
+      "properties": {
+        "subject_event_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "verdict": {
+          "enum": [
+            "approved",
+            "vetoed"
+          ]
+        },
+        "rule_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "pattern": "^SP-[A-Z]{2,6}-[0-9]{3}$"
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          }
+        }
+      }
+    }
+  }
+}

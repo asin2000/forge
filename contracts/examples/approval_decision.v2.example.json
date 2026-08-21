@@ -1,0 +1,20 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-approval-decision-01",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "idempotency_key": "idem-approval_decision-0001",
+    "schema_version": "approval_decision.v2",
+    "data_origin": "SYNTHETIC",
+    "trust_state": "TRUSTED"
+  },
+  "payload": {
+    "approval_id": "apr-gx12-07-sched-01",
+    "action_type": "schedule_override",
+    "decision": "approved",
+    "approver_identity": "demo-approver@forge-demo.example",
+    "decided_at": "2026-08-21T15:30:00Z",
+    "comment": "10-day delay accepted; no compliant alternative."
+  }
+}

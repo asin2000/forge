@@ -1,0 +1,20 @@
+# Data residency — jurisdiction + approved location map (DAT-1, v1.2).
+# CI-9 validates every resource declaration in the deploy config against this
+# map. One repeated region literal is NOT the model: Google services use
+# different location abstractions (Gemini `us` multi-region; Firestore regional
+# and immutable once chosen; Model Armor and Cloud Run regional).
+# Cloud Trace receives metadata-only telemetry (DAT-3/OBS-2); no Assured
+# Workloads or IL4 claim is made.
+residency_jurisdiction: US
+locations:
+  gemini: us
+  cloud_run: us-central1
+  firestore: us-central1
+  pubsub: us-central1
+  quarantine_storage: us-central1
+  model_armor: us-central1
+  cloud_logging: us-central1
+pubsub:
+  endpoint: pubsub.us-central1.rep.googleapis.com
+  allowed_persistence_regions: [us-central1]
+  enforce_in_transit: true

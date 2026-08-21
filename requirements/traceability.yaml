@@ -170,7 +170,7 @@ requirements:
     verification_method: inspection
   ICD-4:
     implemented_by:
-      - contracts/envelope.v1.schema.json
+      - contracts/envelope.v2.schema.json
     verified_by:
       - tests/test_contracts.py
     verification_method: test
@@ -327,7 +327,7 @@ requirements:
     verification_method: document
   SUB-4:
     implemented_by:
-      - pending
+      - PREEXISTING_WORK.md
     verified_by:
       - pending
     verification_method: document
@@ -339,7 +339,7 @@ requirements:
     verification_method: document
   SUB-6:
     implemented_by:
-      - docs/SUB6-authorization-request.md
+      - PREEXISTING_WORK.md
     verified_by:
       - pending
     verification_method: document
@@ -349,3 +349,80 @@ requirements:
     verified_by:
       - pending
     verification_method: document
+  SUB-8:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: document
+  REG-1:
+    implemented_by:
+      - agents/registry.yaml
+      - pending
+    verified_by:
+      - pending
+    verification_method: inspection
+  REG-2:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  REG-3:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  REG-4:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: demonstration
+  REG-5:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  OBS-1:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test
+  OBS-2:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: inspection
+  DAT-1:
+    implemented_by:
+      - infra/residency.yaml
+      - pending
+    verified_by:
+      - pending
+    verification_method: inspection
+  DAT-2:
+    implemented_by:
+      - contracts/envelope.v2.schema.json
+      - src/forge_common/contracts.py
+    verified_by:
+      - tests/test_contracts.py
+      - pending
+    verification_method: test
+  DAT-3:
+    implemented_by:
+      - infra/residency.yaml
+      - pending
+    verified_by:
+      - pending
+    verification_method: inspection
+  CI-9:
+    implemented_by:
+      - pending
+    verified_by:
+      - pending
+    verification_method: test

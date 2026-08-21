@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:approval_request.v2",
+  "title": "Human approval request (decision record)",
+  "description": "Inspectable decision record presented at the human gate. Exposes no model chain-of-thought (HUM-2). Traceability: HUM-2. All data synthetic (SUB-5). (v2: envelope.v2 per DAT-2/OBS-1; payload unchanged from v1.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v2.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "approval_request.v2"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id",
+        "action_type",
+        "recommended_action",
+        "source_refs",
+        "extracted_facts",
+        "applicable_rules",
+        "constraints",
+        "confidence",
+        "alternatives_considered",
+        "versions"
+      ],
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "pattern": "^apr-[a-z0-9-]{4,40}$"
+        },
+        "action_type": {
+          "enum": [
+            "schedule_override",
+            "substitution_approval",
+            "equipment_release"
+          ]
+        },
+        "recommended_action": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 1000
+        },
+        "source_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "extracted_facts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "applicable_rules": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "pattern": "^SP-[A-Z]{2,6}-[0-9]{3}$"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "alternatives_considered": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "option",
+              "rejected_reason"
+            ],
+            "properties": {
+              "option": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "rejected_reason": {
+                "type": "string",
+                "maxLength": 500
+              }
+            }
+          }
+        },
+        "versions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent_id",
+            "model_id",
+            "prompt_version",
+            "schema_version"
+          ],
+          "properties": {
+            "agent_id": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "model_id": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "prompt_version": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[a-z_]+\\.v[0-9]+$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

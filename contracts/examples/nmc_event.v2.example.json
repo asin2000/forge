@@ -1,0 +1,18 @@
+{
+  "envelope": {
+    "workflow_id": "wf-gx12-07-hyd-001",
+    "work_package_id": "wp-none",
+    "event_id": "6a1f0000-0000-4000-8000-000000000001",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "idempotency_key": "idem-nmc_event-0001",
+    "schema_version": "nmc_event.v2",
+    "data_origin": "SYNTHETIC",
+    "trust_state": "TRUSTED"
+  },
+  "payload": {
+    "equipment_id": "GX12-07",
+    "discrepancy_code": "DSC-4411",
+    "description": "Hydraulic actuator failed during lift check; unit non-mission-capable.",
+    "reported_at": "2026-08-21T09:00:00Z"
+  }
+}

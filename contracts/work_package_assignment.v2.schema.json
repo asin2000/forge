@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "forge:contracts:work_package_assignment.v2",
+  "title": "Work package assignment",
+  "description": "Orchestrator assigns a bounded task to exactly one specialist. assignment_seq increments on reassignment; reassigned_from records the previous owner (ORC-1, ORC-3). Traceability: ORC-1, ORC-3. All data synthetic (SUB-5). (v2: envelope.v2 per DAT-2/OBS-1; payload unchanged from v1.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope",
+    "payload"
+  ],
+  "properties": {
+    "envelope": {
+      "allOf": [
+        {
+          "$ref": "envelope.v2.schema.json"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "work_package_assignment.v2"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "objective",
+        "assigned_agent_id",
+        "assignment_seq"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "maintenance",
+            "supply",
+            "workforce",
+            "safety",
+            "cyber_trust"
+          ]
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 1000
+        },
+        "inputs": {
+          "type": "object"
+        },
+        "assigned_agent_id": {
+          "type": "string",
+          "pattern": "^agent-[a-z_]+-[0-9]{2}$"
+        },
+        "assignment_seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reassigned_from": {
+          "type": "string",
+          "pattern": "^agent-[a-z_]+-[0-9]{2}$"
+        },
+        "due_logical_day": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
