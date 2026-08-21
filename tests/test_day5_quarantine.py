@@ -459,53 +459,158 @@ def test_document_containing_end_marker_cannot_escape():
     assert verdict["payload"]["screening_complete"] is True
 
 
-def test_gcs_store_metadata_never_contains_raw_text():
-    """Item 4: the production store keeps raw bytes in GCS only."""
-    from forge_common.quarantine import GcsQuarantineStore, QuarantineConflict
+class StubBlob:
+    def __init__(self, bucket, name):
+        self._bucket, self._name = bucket, name
+        self.generation = None
 
-    class StubBlob:
-        def __init__(self, blobs, name):
-            self._blobs, self._name = blobs, name
+    def upload_from_string(self, data, content_type=None, if_generation_match=None):
+        from google.api_core.exceptions import PreconditionFailed
 
-        def upload_from_string(self, data, content_type=None):
-            self._blobs[self._name] = data
+        if self._bucket.fail_uploads:
+            raise ConnectionError("simulated GCS outage")
+        exists = self._name in self._bucket.blobs
+        if if_generation_match == 0 and exists:
+            raise PreconditionFailed("object exists")
+        self._bucket.generations[self._name] = self._bucket.generations.get(self._name, 0) + 1
+        self._bucket.blobs[self._name] = data
+        self.generation = self._bucket.generations[self._name]
 
-        def download_as_text(self):
-            return self._blobs[self._name]
+    def reload(self):
+        self.generation = self._bucket.generations.get(self._name)
 
-    class StubBucket:
-        def __init__(self):
-            self.blobs = {}
+    def download_as_text(self, if_generation_match=None):
+        from google.api_core.exceptions import PreconditionFailed
 
-        def blob(self, name):
-            return StubBlob(self.blobs, name)
+        if if_generation_match is not None and if_generation_match != self._bucket.generations.get(
+            self._name
+        ):
+            raise PreconditionFailed("generation mismatch")
+        return self._bucket.blobs[self._name]
 
-    class StubClient:
-        def __init__(self):
-            self._bucket = StubBucket()
 
-        def bucket(self, name):
-            return self._bucket
+class StubBucket:
+    def __init__(self):
+        self.blobs, self.generations, self.fail_uploads = {}, {}, False
+
+    def blob(self, name):
+        return StubBlob(self, name)
+
+
+class StubClient:
+    def __init__(self):
+        self._bucket = StubBucket()
+
+    def bucket(self, name):
+        return self._bucket
+
+
+def gcs_ready():
+    from forge_common.quarantine import GcsQuarantineStore
 
     db = FakeFirestore()
     client = StubClient()
-    store = GcsQuarantineStore(db, bucket="forge-quarantine-demo", client=client)
+    return db, client, GcsQuarantineStore(db, bucket="forge-quarantine-demo", client=client)
+
+
+def test_gcs_store_metadata_never_contains_raw_text():
+    """Item 4: the production store keeps raw bytes in GCS only; metadata
+    records the object generation."""
+    from forge_common.quarantine import QuarantineConflict
+
+    db, client, store = gcs_ready()
     record, created = store.put(
         doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email"
     )
     assert created is True
     assert "raw_text" not in record
+    assert record["gcs_generation"] == 1
     assert "raw_text" not in json.dumps(store.get(DOC))
     assert INJECTION_MARKER not in json.dumps(
         {"/".join(k): v for k, v in db.store.items()}, default=str
     )
-    assert store.read_raw(DOC) == BULLETIN  # object round-trip
+    assert store.read_raw(DOC) == BULLETIN
     again, created2 = store.put(
         doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email"
     )
     assert created2 is False and again["sha256"] == record["sha256"]
     with pytest.raises(QuarantineConflict):
         store.put(doc_id=DOC, workflow_id=WF, raw_text="other", source="vendor-email")
+
+
+def test_gcs_upload_failure_leaves_no_metadata_and_retry_succeeds():
+    """Blocker 2: object-first ordering — a failed upload writes NOTHING to
+    Firestore; the identical retry succeeds cleanly."""
+    db, client, store = gcs_ready()
+    client._bucket.fail_uploads = True
+    with pytest.raises(ConnectionError):
+        store.put(doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email")
+    assert store.get(DOC) is None  # no stranded metadata
+    assert client._bucket.blobs == {}
+    client._bucket.fail_uploads = False
+    record, created = store.put(
+        doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email"
+    )
+    assert created is True and store.read_raw(DOC) == BULLETIN
+
+
+def test_gcs_orphan_object_is_repaired_by_retry():
+    """Blocker 2: crash AFTER upload, BEFORE metadata — the orphan object is
+    safe; the retry verifies its bytes and lands the metadata (created=True,
+    so the quarantine audit belongs to the completing attempt)."""
+    db, client, store = gcs_ready()
+    # Simulate the crash window: object uploaded, no metadata.
+    client._bucket.blob(f"quarantine/{DOC}").upload_from_string(BULLETIN, if_generation_match=0)
+    assert store.get(DOC) is None
+    record, created = store.put(
+        doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email"
+    )
+    assert created is True
+    assert record["gcs_generation"] == 1
+    assert store.read_raw(DOC) == BULLETIN
+
+
+def test_gcs_concurrent_different_content_single_winner():
+    """Blocker 2: generation-0 precondition gives exactly one winner; the
+    loser's differing bytes are a QuarantineConflict, and the winner's
+    object survives untouched."""
+    from forge_common.quarantine import QuarantineConflict
+
+    db, client, store = gcs_ready()
+    store.put(doc_id=DOC, workflow_id=WF, raw_text=BULLETIN, source="vendor-email")
+    with pytest.raises(QuarantineConflict):
+        store.put(
+            doc_id=DOC,
+            workflow_id=WF,
+            raw_text=BULLETIN + "attacker-variant",
+            source="vendor-email",
+        )
+    assert store.read_raw(DOC) == BULLETIN
+
+
+def test_gcs_tampered_bytes_fail_screening_closed():
+    """Blocker 2: modified object bytes fail the SHA check; screening fails
+    closed and the failure is audited."""
+    db, client, store = gcs_ready()
+    state.create_workflow(
+        db, workflow_id=WF, equipment_id="GX12-07", trace_id=TRACE, logical_time=0
+    )
+    ingest_document(
+        db,
+        store,
+        workflow_id=WF,
+        doc_id=DOC,
+        raw_text=BULLETIN,
+        source="vendor-email",
+        trace_id=TRACE,
+    )
+    # Tamper with the stored object (same generation, different bytes).
+    client._bucket.blobs[f"quarantine/{DOC}"] = BULLETIN + " tampered"
+    result = screen(db, store)
+    assert result is None
+    assert store.get(DOC)["status"] == "QUARANTINED"
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, WF)]
+    assert "SCREENING_FAILED" in reasons
 
 
 ARMOR_BODY_OK_CLEAN = {
@@ -554,6 +659,15 @@ def test_armor_success_shapes():
         {"sanitizationResult": {"invocationResult": "FAILURE"}},
         {"sanitizationResult": {"invocationResult": "SUCCESS"}},  # missing match state
         {"unexpected": True},  # missing sanitizationResult
+        # Entrant blocker: a valid match state with NO invocationResult must
+        # fail closed — a defaulted SUCCESS was a fail-open.
+        {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}},
+        {
+            "sanitizationResult": {
+                "invocationResult": "INVOCATION_RESULT_UNSPECIFIED",
+                "filterMatchState": "NO_MATCH_FOUND",
+            }
+        },
     ],
 )
 def test_armor_incomplete_or_malformed_raises(body):

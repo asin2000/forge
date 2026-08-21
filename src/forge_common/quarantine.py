@@ -117,9 +117,24 @@ class FirestoreQuarantineStore(_QuarantineStoreBase):
         return record["raw_text"]
 
 
+class QuarantineIntegrityError(Exception):
+    """Stored bytes do not match the recorded hash — screening fails closed."""
+
+
 class GcsQuarantineStore(_QuarantineStoreBase):
     """Production store: raw bytes in GCS under the canonical URI; Firestore
-    metadata NEVER contains raw_text (SEC-4)."""
+    metadata NEVER contains raw_text (SEC-4).
+
+    WRITE ORDER (quarantine-first, crash-safe): the OBJECT uploads first
+    with ``if_generation_match=0`` — an orphaned object after a Firestore
+    failure is safe and retryable, whereas metadata pointing at nonexistent
+    bytes would strand the document. A precondition failure means the object
+    already exists: its bytes are hash-verified against the new ingest
+    (mismatch -> QuarantineConflict; a concurrent different-content race has
+    exactly one winner). Only then is the Firestore metadata
+    created-or-validated, persisting the object GENERATION; reads verify the
+    downloaded bytes against the recorded SHA before screening.
+    """
 
     def __init__(self, db: Any, *, bucket: str, client: Any = None):
         super().__init__(db, bucket=bucket)
@@ -132,27 +147,58 @@ class GcsQuarantineStore(_QuarantineStoreBase):
     def put(
         self, *, doc_id: str, workflow_id: str, raw_text: str, source: str
     ) -> tuple[dict[str, Any], bool]:
+        from google.api_core.exceptions import PreconditionFailed
+
         record = self._metadata(
             doc_id=doc_id, workflow_id=workflow_id, raw_text=raw_text, source=source
         )
+        blob = self._bucket.blob(f"quarantine/{doc_id}")
+        try:
+            # Object FIRST, race-proof: generation 0 = "only if absent".
+            blob.upload_from_string(raw_text, content_type="text/plain", if_generation_match=0)
+            object_new = True
+        except PreconditionFailed:
+            # Exists (previous crash-retry or a concurrent winner): verify
+            # the stored bytes are OUR bytes before accepting them.
+            existing_text = blob.download_as_text()
+            if sha256_hex(existing_text) != record["sha256"]:
+                raise QuarantineConflict(
+                    f"doc_id {doc_id}: existing quarantine object bytes differ "
+                    f"from this ingest (concurrent different-content race or reuse)"
+                ) from None
+            object_new = False
+        if blob.generation is None:  # populated by upload; fetch after 412 path
+            blob.reload()
+        record["gcs_generation"] = blob.generation
 
-        def _put(txn: Any) -> dict[str, Any] | None:
+        def _put(txn: Any) -> tuple[dict[str, Any], bool]:
             existing = layout.txn_get_dict(txn, quarantine_ref(self._db, doc_id))
             kept = self._existing_or_conflict(record, existing)
             if kept is not None:
-                return kept
+                return kept, False
             txn.create(quarantine_ref(self._db, doc_id), record)
-            return None
+            # created=True: this call completed the ingest (even when the
+            # object pre-existed from a crashed earlier attempt — the audit
+            # belongs to whoever lands the metadata).
+            return record, True
 
-        kept = layout.run_in_transaction(self._db, _put)
-        if kept is not None:
-            return kept, False  # idempotent re-ingest: object already uploaded
-        self._bucket.blob(f"quarantine/{doc_id}").upload_from_string(
-            raw_text, content_type="text/plain"
-        )
-        return record, True
+        stored, created = layout.run_in_transaction(self._db, _put)
+        del object_new  # object state is independent of audit ownership
+        return stored, created
 
     def read_raw(self, doc_id: str) -> str:
-        """Reads the GCS object — succeeds only for identities holding
-        bucket read (the Cyber Trust service account in production)."""
-        return self._bucket.blob(f"quarantine/{doc_id}").download_as_text()
+        """Download the object and verify it against the recorded SHA —
+        tampered or mismatched bytes raise and screening fails closed."""
+        record = self.get(doc_id)
+        if record is None:
+            raise KeyError(doc_id)
+        blob = self._bucket.blob(f"quarantine/{doc_id}")
+        kwargs = {}
+        if record.get("gcs_generation"):
+            kwargs["if_generation_match"] = record["gcs_generation"]
+        text = blob.download_as_text(**kwargs)
+        if sha256_hex(text) != record["sha256"]:
+            raise QuarantineIntegrityError(
+                f"doc_id {doc_id}: downloaded bytes do not match recorded sha256"
+            )
+        return text

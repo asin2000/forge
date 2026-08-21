@@ -115,7 +115,7 @@ requirements:
     verification_method: test
   SEC-2:
     implemented_by:
-      - contracts/quarantine_verdict.v2.schema.json
+      - contracts/quarantine_verdict.v3.schema.json
       - services/cyber_trust/handlers.py
     verified_by:
       - tests/test_contracts.py
@@ -130,7 +130,7 @@ requirements:
     verification_method: test
   SEC-4:
     implemented_by:
-      - contracts/quarantine_verdict.v2.schema.json
+      - contracts/quarantine_verdict.v3.schema.json
       - services/cyber_trust/handlers.py
       - src/forge_common/quarantine.py
     verified_by:

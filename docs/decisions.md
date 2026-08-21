@@ -1,3 +1,8 @@
+# Design decisions
+
+> Provenance note: headers carry the MERGE date plus the plan's
+> build-day label — the build ran ahead of the calendar schedule.
+
 # Engineering decisions (one line each, per DFT-3 spirit)
 
 - 2026-08-21 · Region pinned `us-central1` (PLT-1): broadest availability for
@@ -43,7 +48,7 @@
   preexisting-rights rule (see PREEXISTING_WORK.md); no member authorization
   artifact exists anymore.
 
-## 2026-08-22 — Day 2 core (branch `day2-state-and-messaging`)
+## 2026-08-21 (build-day 2) — Day 2 core (branch `day2-state-and-messaging`)
 
 - **Transaction shape (AUD-2).** One Firestore transaction couples: inbox
   marker create (when consuming), state write (schema-validated), audit
@@ -65,7 +70,7 @@
   read-modify-write txn; due-event emission is per-workflow idempotent
   enqueue, so a crash mid-scan re-runs safely (ORC-5).
 
-## 2026-08-22 — Day 2 adversarial review fixes (same branch)
+## 2026-08-21 (build-day 2) — Day 2 adversarial review fixes (same branch)
 
 An 8-agent adversarial review (4 lenses + verifiers) confirmed 11 defects;
 all fixed with regression tests:
@@ -92,7 +97,7 @@ all fixed with regression tests:
 - Documented scope limit: re-arming an already-fired absolute due day will
   not re-fire (needs a suspension-epoch counter = state schema bump; §10).
 
-## 2026-08-22 — Day 2 verification gate (branch `day2-verification-gate`)
+## 2026-08-21 (build-day 2) — Day 2 verification gate (branch `day2-verification-gate`)
 
 Entrant review (read-only) correctly rejected "Day 2 complete": the emulator
 exit gate had not run and the handler executed inside the transaction
@@ -121,7 +126,7 @@ callback. Both closed, plus five confirmed findings:
 - Governance drift fixed: build plan → v1.2 / 21 days / `v1.2-demo`;
   traceability message-schema refs → `.v2`.
 
-## 2026-08-22 — Corrections to earlier entries (v1.2 supersessions)
+## 2026-08-21 (build-day 2) — Corrections to earlier entries (v1.2 supersessions)
 
 Two statements in the Day-1 entry are superseded and should not be relied on:
 - "region `us-central1`" for the model: `gemini-3.5-flash` runs at the `us`
@@ -133,7 +138,7 @@ Two statements in the Day-1 entry are superseded and should not be relied on:
 Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
 — live GCP verification is scheduled Day 6–7 (Lane 2, CI-6).
 
-## 2026-08-23 — Day 3: Orchestrator, first specialists, registry discovery
+## 2026-08-21 (build-day 3) — Day 3: Orchestrator, first specialists, registry discovery
 
 - **Orchestrator (ORC-1/2).** `services/orchestrator/handlers.py` binds no
   domain tools; its model call yields role OBJECTIVES only, validated
@@ -157,7 +162,7 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   design (ORC-4 governs specialist failures; the orchestrator's own retry
   path is the transport lease).
 
-## 2026-08-23 — Day 3 completion (entrant HOLD): real ADK + five gap fixes
+## 2026-08-21 (build-day 3) — Day 3 completion (entrant HOLD): real ADK + five gap fixes
 
 - **Google ADK is now the execution path (PLT-2).** `agent_base` builds an
   ADK `LlmAgent` driven by a `Runner` with a fresh session per call;
@@ -178,7 +183,7 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   ORCHESTRATOR_REASONING_EXHAUSTED escalation + BLOCKED (recovery via
   BLOCKED → PLANNING), not a NACK loop.
 
-## 2026-08-24 — Day 4: repair loop, monitoring, data-backed domain facts
+## 2026-08-21 (build-day 4) — Day 4: repair loop, monitoring, data-backed domain facts
 
 - **Domain facts come from data, never the model.** `/data/*.yaml`
   (approved parts, qualifications, procedures) + `synthetic_data.py`;
@@ -200,7 +205,7 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
 - Riders: REG-2 negative race + full repair loop proven on the REAL
   Firestore emulator; ADK smoke artifact now carries exact captured stdout.
 
-## 2026-08-24 — Day 4 closeout (entrant HOLD): package lifecycle + real flow
+## 2026-08-21 (build-day 4) — Day 4 closeout (entrant HOLD): package lifecycle + real flow
 
 - **Package lifecycle (gap 1).** Specialists flip their package
   COMPLETED / FAILED_PENDING_REPAIR atomically with their output
@@ -225,7 +230,7 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   reports, and rosters, each against its data-backed compliance engine;
   reason codes generalized to ACTION_APPROVED/ACTION_VETOED.
 
-## 2026-08-24 — Day 4 race closeout (entrant HOLD round 2)
+## 2026-08-21 (build-day 4) — Day 4 race closeout (entrant HOLD round 2)
 
 - **Owned-effects bundle (blocker 1).** A specialist's domain output, audit,
   and status ride ONE transactional ownership guard
@@ -247,7 +252,7 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
 - All bundle-nested audit/outbox messages are contract-validated BEFORE the
   transaction, like every other effect.
 
-## 2026-08-25 — Day 5: quarantine-first screening pipeline (SEC-1..4)
+## 2026-08-21 (build-day 5) — Day 5: quarantine-first screening pipeline (SEC-1..4)
 
 - **Quarantine store**: canonical gs:// URIs per the verdict contract;
   demo/emulator bytes live in the Firestore `quarantine` collection under
@@ -271,7 +276,7 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
 - Model Armor adapter mirrors the proven smoke REST call; live exercised by
   the smoke + Lane 2 (CI-6); unit/emulator stub it.
 
-## 2026-08-25 — Day 5 corrective (entrant HOLD)
+## 2026-08-21 (build-day 5) — Day 5 corrective (entrant HOLD)
 
 - **Model Armor fail-closed for real**: invocationResult PARTIAL/FAILURE,
   missing fields, malformed JSON, transport/timeout/auth failures all
@@ -306,3 +311,22 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
 - Riders: clear exception boundary (AgentOutputMalformed / ScreeningError /
   unexpected — all fail closed); prompt BEGIN/END markers neutralized in
   document text (escape test); count corrected per entrant: 135 was right.
+
+## 2026-08-21 (build-day 5) — Final corrective: two fail-closed gaps
+
+- **invocationResult must be EXPLICIT SUCCESS**: the previous
+  `.get("invocationResult", "SUCCESS")` default silently treated a response
+  missing the field as fully screened — a fail-open. Missing/UNSPECIFIED
+  now raise like PARTIAL/FAILURE (regressions added).
+- **GCS write order inverted to object-first**: upload with
+  `if_generation_match=0` (single winner under concurrency), hash-verify an
+  existing object before adopting it, THEN create/validate Firestore
+  metadata persisting the object generation; reads verify downloaded bytes
+  against the recorded SHA (tamper -> screening fails closed, audited). An
+  orphaned object after a Firestore failure is safe and self-repairing on
+  retry; stranded metadata can no longer exist. Five-scenario test battery
+  (upload failure, retry, orphan repair, different-content race, tamper).
+- Riders: SEC-2/SEC-4 traceability now cite quarantine_verdict.v3; the live
+  smoke is labeled a COMPONENT smoke (end-to-end = Lane 2); decision-log
+  headers carry merge date + build-day label (everything so far merged
+  2026-08-21).
