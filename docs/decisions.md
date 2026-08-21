@@ -224,3 +224,25 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
 - **Safety validates every proposed action (AGT-4):** plans, sourcing
   reports, and rosters, each against its data-backed compliance engine;
   reason codes generalized to ACTION_APPROVED/ACTION_VETOED.
+
+## 2026-08-24 — Day 4 race closeout (entrant HOLD round 2)
+
+- **Owned-effects bundle (blocker 1).** A specialist's domain output, audit,
+  and status ride ONE transactional ownership guard
+  (TxnWrites.owned_effects): reassigned mid-flight -> nothing commits. The
+  outbox can never hold competing rosters; only the current owner completes.
+- **Conditional failure disposition (blocker 2).** Non-reserve failures use
+  TxnWrites.failure_disposition: the package is transactionally re-read at
+  commit — completed/stale -> consume with zero effects; still-assigned ->
+  package FAILED + instance FAILED + workflow BLOCKED + escalation audit in
+  one transaction. Both interleavings proven on the real emulator with
+  thread barriers.
+- **Agent output IDs are source-event-scoped**: deterministic per consumed
+  message (redelivery idempotent), distinct across different messages about
+  the same package (found when two Safety verdicts collided).
+- **Safety rider**: engines take the workflow discrepancy (read from the
+  work-package record); sourcing_report bumped to v3 under ICD-3 with
+  discrepancy-specific part_approved semantics; wrong-discrepancy plan and
+  actual roster verdicts tested.
+- All bundle-nested audit/outbox messages are contract-validated BEFORE the
+  transaction, like every other effect.

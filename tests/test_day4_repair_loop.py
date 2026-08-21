@@ -82,6 +82,24 @@ def failure_message(role, agent_id, *, kind="malformed_after_retries", suffix="a
     }
 
 
+def claim_package(db, role, instance=None, inputs=None):
+    """Specialist outputs are ownership-guarded: tests must hold a real claim."""
+
+    def _claim(txn):
+        registry.claim_work_package(
+            txn,
+            db,
+            workflow_id=WF,
+            work_package_id=f"wp-{role}-{WF.removeprefix('wf-')}",
+            instance_id=instance or f"agent-{role}-01",
+            role=role,
+            objective=f"Test objective for {role}.",
+            inputs=inputs or NMC_INPUTS,
+        )
+
+    layout.run_in_transaction(db, _claim)
+
+
 def claim_workforce_package(db, objective="Staff the maintenance plan."):
     def _claim(txn):
         registry.claim_work_package(
@@ -109,6 +127,7 @@ def outbox_messages(db):
 
 def test_supply_cannot_assert_unapproved_part():
     db = ready_db()
+    claim_package(db, "supply")
     lying = stub_json(
         {
             "part_number": "VND-ACT-9901",  # the vendor substitute — NOT approved
@@ -130,6 +149,7 @@ def test_supply_cannot_assert_unapproved_part():
 
 def test_supply_truthful_reports_publish():
     db = ready_db()
+    claim_package(db, "supply")
     truthful = stub_json(
         {
             "part_number": "HYD-ACT-4402",
@@ -145,12 +165,13 @@ def test_supply_truthful_reports_publish():
         consumer_identity="forge-supply",
     )
     report = outbox_messages(db)[0]
-    assert report["envelope"]["schema_version"] == "sourcing_report.v2"
+    assert report["envelope"]["schema_version"] == "sourcing_report.v3"
     assert report["payload"]["part_approved"] is True
 
 
 def test_supply_unapproved_part_reported_honestly_publishes():
     db = ready_db()
+    claim_package(db, "supply")
     honest = stub_json(
         {
             "part_number": "VND-ACT-9901",
@@ -166,7 +187,7 @@ def test_supply_unapproved_part_reported_honestly_publishes():
         consumer_identity="forge-supply",
     )
     report = outbox_messages(db)[0]
-    assert report["envelope"]["schema_version"] == "sourcing_report.v2"
+    assert report["envelope"]["schema_version"] == "sourcing_report.v3"
     assert report["payload"]["part_approved"] is False
 
 
@@ -175,6 +196,7 @@ def test_supply_unapproved_part_reported_honestly_publishes():
 
 def test_workforce_qualified_roster_publishes():
     db = ready_db()
+    claim_package(db, "workforce", inputs={**NMC_INPUTS, "task_codes": ["TC-101"]})
     roster = stub_json(
         {
             "assignments": [
@@ -206,6 +228,7 @@ def test_workforce_qualified_roster_publishes():
 )
 def test_workforce_waiver_attempts_fail(technician, qualification):
     db = ready_db()
+    claim_package(db, "workforce", inputs={**NMC_INPUTS, "task_codes": ["TC-101"]})
     waiver = stub_json(
         {
             "assignments": [
@@ -606,6 +629,7 @@ def test_supply_approval_is_discrepancy_specific():
     """An approved ELECTRICAL part is NOT approved for the hydraulic
     discrepancy."""
     db = ready_db()
+    claim_package(db, "supply")
     cross_sell = stub_json(
         {
             "part_number": "ELEC-HARN-2210",  # approved, but only for DSC-0311
@@ -626,6 +650,7 @@ def test_supply_approval_is_discrepancy_specific():
 
 def test_supply_cannot_invent_shipment_status_or_eta():
     db = ready_db()
+    claim_package(db, "supply")
     optimistic = stub_json(
         {
             "part_number": "HYD-ACT-4402",
@@ -653,7 +678,7 @@ def test_safety_validates_sourcing_and_rosters():
         "envelope": build_envelope(
             workflow_id=WF,
             work_package_id=f"wp-supply-{WF.removeprefix('wf-')}",
-            schema_version="sourcing_report.v2",
+            schema_version="sourcing_report.v3",
             event_id=deterministic_event_id("t-report", WF),
             trace_id=TRACE,
             idempotency_key="idem-t-report-01",
@@ -679,3 +704,202 @@ def test_safety_validates_sourcing_and_rosters():
     verdict = outbox_messages(db)[0]
     assert verdict["envelope"]["schema_version"] == "validation_verdict.v2"
     assert verdict["payload"]["verdict"] == "vetoed"
+
+
+# ---------- Race blockers (entrant review round 2) ----------
+
+
+def test_stale_worker_entire_bundle_dropped():
+    """Blocker 1 (fake): a worker reassigned mid-flight commits NOTHING —
+    no output, no audit, no status."""
+    db = ready_db()
+    claim_package(db, "supply")
+    inner = make_supply_handler(
+        db,
+        stub_json(
+            {
+                "part_number": "HYD-ACT-4402",
+                "part_approved": True,
+                "shipment_status": "delayed",
+                "eta_days": 21,
+            }
+        ),
+    )
+
+    def usurped(msg, writes):
+        inner(msg, writes)  # bundle prepared by the real handler
+        ref = (
+            db.collection("workflows")
+            .document(WF)
+            .collection("work_packages")
+            .document(f"wp-supply-{WF.removeprefix('wf-')}")
+        )
+        ref.set({**ref.get().to_dict(), "owner_instance_id": "agent-supply-99"})
+
+    assert process_message(
+        db, assignment_message("supply"), usurped, consumer_identity="forge-supply"
+    )
+    assert outbox_messages(db) == []
+    trail = state.reconstruct_audit_trail(db, WF)
+    assert all(e["payload"]["reason_code"] != "DOMAIN_OUTPUT_PRODUCED" for e in trail)
+    wp = wp_doc(db, "supply")
+    assert wp["owner_instance_id"] == "agent-supply-99"
+    assert wp["status"] == "ASSIGNED"
+
+
+def test_completion_between_preread_and_commit_prevents_block():
+    """Blocker 2 (fake): the package completes after the failure handler's
+    pre-read — the commit-time recheck consumes the event with zero effects."""
+    db = ready_db()
+    claim_package(db, "supply")
+    inner = make_failure_handler(db)
+
+    def raced(msg, writes):
+        inner(msg, writes)  # pre-read saw ASSIGNED; disposition prepared
+        ref = (
+            db.collection("workflows")
+            .document(WF)
+            .collection("work_packages")
+            .document(f"wp-supply-{WF.removeprefix('wf-')}")
+        )
+        ref.set({**ref.get().to_dict(), "status": "COMPLETED"})
+
+    trail_before = len(state.reconstruct_audit_trail(db, WF))
+    assert process_message(
+        db,
+        failure_message("supply", "agent-supply-01"),
+        raced,
+        consumer_identity="forge-orchestrator",
+    )
+    assert db.collection("workflows").document(WF).get().to_dict()["status"] == "INTAKE"
+    assert len(state.reconstruct_audit_trail(db, WF)) == trail_before
+    assert wp_doc(db, "supply")["status"] == "COMPLETED"
+    assert registry.instance_ref(db, "agent-supply-01").get().to_dict()["state"] != "FAILED"
+
+
+def test_still_assigned_failure_marks_package_and_instance_failed():
+    """Blocker 2 (fake): the genuine path — package still assigned to the
+    failed owner — blocks, audits, and marks package + instance FAILED
+    atomically."""
+    db = ready_db()
+    claim_package(db, "supply")
+    assert process_message(
+        db,
+        failure_message("supply", "agent-supply-01"),
+        make_failure_handler(db),
+        consumer_identity="forge-orchestrator",
+    )
+    assert (
+        db.collection("workflows").document(WF).get().to_dict()["status"] == "BLOCKED_AGENT_FAILURE"
+    )
+    assert wp_doc(db, "supply")["status"] == "FAILED"
+    assert registry.instance_ref(db, "agent-supply-01").get().to_dict()["state"] == "FAILED"
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, WF)]
+    assert "SPECIALIST_FAILURE_NO_RESERVE" in reasons
+
+
+# ---------- Safety rider: discrepancy alignment + roster verdicts ----------
+
+
+def test_safety_rejects_wrong_discrepancy_part_in_plan():
+    """A part approved for the ELECTRICAL discrepancy cannot pass Safety in
+    the hydraulic workflow."""
+    db = ready_db()
+    claim_package(db, "maintenance")  # wp carries inputs.discrepancy_code=DSC-0042
+    plan = plan_message(["ELEC-HARN-2210"])
+    vetoing = stub_json(
+        {
+            "subject_event_id": plan["envelope"]["event_id"],
+            "verdict": "vetoed",
+            "rule_refs": ["SP-PART-001"],
+            "reasons": ["ELEC-HARN-2210 is not approved for DSC-0042."],
+        }
+    )
+    process_message(
+        db, plan, make_plan_validation_handler(db, vetoing), consumer_identity="forge-safety"
+    )
+    verdicts = [
+        m for m in outbox_messages(db) if m["envelope"]["schema_version"] == "validation_verdict.v2"
+    ]
+    assert verdicts and verdicts[0]["payload"]["verdict"] == "vetoed"
+    # And a stub trying to APPROVE it is refused (contradicts the engine).
+    db2 = ready_db()
+    claim_package(db2, "maintenance")
+    approving = stub_json(
+        {
+            "subject_event_id": plan["envelope"]["event_id"],
+            "verdict": "approved",
+            "rule_refs": ["SP-PART-001"],
+            "reasons": ["Part is registered."],
+        }
+    )
+    process_message(
+        db2, plan, make_plan_validation_handler(db2, approving), consumer_identity="forge-safety"
+    )
+    out = outbox_messages(db2)[0]
+    assert out["envelope"]["schema_version"] == "agent_failure_event.v2"
+
+
+def test_safety_roster_verdicts():
+    """AGT-4 rider: an actual roster is validated — veto on unqualified."""
+    from services.safety.handlers import make_validation_handler
+
+    db = ready_db()
+    claim_package(db, "workforce")
+
+    def roster_msg(technician, qual):
+        return {
+            "envelope": build_envelope(
+                workflow_id=WF,
+                work_package_id=f"wp-workforce-{WF.removeprefix('wf-')}",
+                schema_version="roster_assignment.v2",
+                event_id=deterministic_event_id("t-roster", WF, technician),
+                trace_id=TRACE,
+                idempotency_key=f"idem-t-roster-{technician.lower()}",
+            ),
+            "payload": {
+                "assignments": [
+                    {
+                        "task_code": "TC-101",
+                        "technician_id": technician,
+                        "qualification_id": qual,
+                    }
+                ]
+            },
+        }
+
+    bad = roster_msg("T-2001", "Q-ELE-201")  # unqualified for TC-101
+    vetoing = stub_json(
+        {
+            "subject_event_id": bad["envelope"]["event_id"],
+            "verdict": "vetoed",
+            "rule_refs": ["SP-QUAL-001"],
+            "reasons": ["T-2001 holds no TC-101 qualification."],
+        }
+    )
+    process_message(db, bad, make_validation_handler(db, vetoing), consumer_identity="forge-safety")
+    verdict = next(
+        m for m in outbox_messages(db) if m["envelope"]["schema_version"] == "validation_verdict.v2"
+    )
+    assert verdict["payload"]["verdict"] == "vetoed"
+    assert "SP-QUAL-001" in verdict["payload"]["rule_refs"]
+
+    good = roster_msg("T-1001", "Q-HYD-101")
+    approving = stub_json(
+        {
+            "subject_event_id": good["envelope"]["event_id"],
+            "verdict": "approved",
+            "rule_refs": ["SP-QUAL-001"],
+            "reasons": ["All technicians qualified."],
+        }
+    )
+    process_message(
+        db, good, make_validation_handler(db, approving), consumer_identity="forge-safety"
+    )
+    approved = [
+        m
+        for m in outbox_messages(db)
+        if m["envelope"]["schema_version"] == "validation_verdict.v2"
+        and m["payload"]["verdict"] == "approved"
+    ]
+    assert len(approved) == 1

@@ -144,6 +144,7 @@ class StructuredAgent:
         workflow_id: str,
         work_package_id: str,
         trace_id: str,
+        source_event_id: str = "",
         payload_check: Any = None,
     ) -> dict[str, Any]:
         """Produce ONE contract-valid bus message (or a failure event).
@@ -172,6 +173,7 @@ class StructuredAgent:
                     work_package_id=work_package_id,
                     trace_id=trace_id,
                     attempt=attempts,
+                    source_event_id=source_event_id,
                 )
                 validate_message(message)
                 if payload_check is not None:
@@ -205,6 +207,7 @@ class StructuredAgent:
             work_package_id=work_package_id,
             trace_id=trace_id,
             attempt=attempts,
+            source_event_id=source_event_id,
         )
         validate_message(failure)
         return failure
@@ -218,13 +221,18 @@ class StructuredAgent:
         work_package_id: str,
         trace_id: str,
         attempt: int,
+        source_event_id: str = "",
     ) -> dict[str, Any]:
+        # Deterministic PER CONSUMED MESSAGE (source_event_id): redelivery of
+        # the same delivery collides (idempotent), while two different
+        # messages about the same package produce distinct outputs.
         event_id = deterministic_event_id(
             "agent-out",
             workflow_id,
             work_package_id,
             self.agent_id,
             schema_version,
+            source_event_id,
             str(attempt),
         )
         return {

@@ -21,7 +21,7 @@ from forge_common.specialist import make_work_package_handler
 
 ROLE = "supply"
 PROMPT_FILE = "supply_sourcing_report.v3.md"
-OUTPUT_SCHEMA = "sourcing_report.v2"
+OUTPUT_SCHEMA = "sourcing_report.v3"
 
 
 def _variables(assignment_payload: dict[str, Any]) -> dict[str, Any]:

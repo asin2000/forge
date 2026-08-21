@@ -228,18 +228,38 @@ def make_failure_handler(db: Any):
             # (a reassignment plan that turns stale commits nothing either).
             return
         if role != "workforce":
-            _make_escalation(
-                db,
-                writes,
-                workflow_id=workflow_id,
-                trace_id=trace_id,
-                reason_code="SPECIALIST_FAILURE_NO_RESERVE",
-                payload=payload,
-                error=(
-                    f"{payload['agent_id']} failed ({payload['failure_kind']}); "
-                    f"role {role} holds no reserve (ORC-4)"
-                ),
+            # Conditional disposition (entrant blocker 2): the package is
+            # transactionally re-read at commit; if it completed or ownership
+            # moved between this pre-read and the commit, the event is
+            # consumed with ZERO effects — otherwise package+instance are
+            # marked FAILED, the workflow blocks, and the escalation audits,
+            # all in one transaction.
+            error = (
+                f"{payload['agent_id']} failed ({payload['failure_kind']}); "
+                f"role {role} holds no reserve (ORC-4)"
             )
+            writes.failure_disposition = {
+                "work_package_id": work_package_id,
+                "failed_instance_id": payload["agent_id"],
+                "transition": {
+                    "target": "BLOCKED_AGENT_FAILURE",
+                    "agent_identity": ORCHESTRATOR_IDENTITY,
+                    "trace_id": trace_id,
+                    "reason_code": "SPECIALIST_FAILURE_NO_RESERVE",
+                    "detail": error[:1000],
+                },
+                "audit_event": build_audit_event(
+                    workflow_id=workflow_id,
+                    trace_id=trace_id,
+                    agent_identity=ORCHESTRATOR_IDENTITY,
+                    event_kind="escalation",
+                    reason_code="SPECIALIST_FAILURE_NO_RESERVE",
+                    input_obj=payload,
+                    output_obj={"error": error},
+                    effective_at=read_clock(db),
+                    work_package_id=work_package_id,
+                ),
+            }
             return
         reserve = registry.find_reserve_instance(db, "workforce")
         if reserve is None:

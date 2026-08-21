@@ -24,7 +24,7 @@ MESSAGE_TYPES = (
     "nmc_event.v2",
     "work_package_assignment.v2",
     "maintenance_action_plan.v2",
-    "sourcing_report.v2",
+    "sourcing_report.v3",
     "roster_assignment.v2",
     "validation_verdict.v2",
     "quarantine_verdict.v2",

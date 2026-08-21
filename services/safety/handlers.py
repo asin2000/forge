@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from forge_common import synthetic_data
+from forge_common import layout, synthetic_data
 from forge_common.agent_base import StructuredAgent
 from forge_common.audit import build_audit_event
 from forge_common.bus import TxnWrites
@@ -29,7 +29,7 @@ OUTPUT_SCHEMA = "validation_verdict.v2"
 #: schema_version -> compliance engine (AGT-4: every proposed action).
 VALIDATORS = {
     "maintenance_action_plan.v2": synthetic_data.plan_violations,
-    "sourcing_report.v2": synthetic_data.sourcing_violations,
+    "sourcing_report.v3": synthetic_data.sourcing_violations,
     "roster_assignment.v2": synthetic_data.roster_violations,
 }
 
@@ -43,7 +43,12 @@ def make_validation_handler(db: Any, model: Any):
         if engine is None:
             return  # not a proposed action; consumption recorded, no verdict
         plan = message["payload"]
-        violations = engine(plan)
+        wp_snapshot = layout.work_package_ref(
+            db, envelope["workflow_id"], envelope["work_package_id"]
+        ).get()
+        wp = wp_snapshot.to_dict() if hasattr(wp_snapshot, "to_dict") else wp_snapshot
+        discrepancy = (wp or {}).get("inputs", {}).get("discrepancy_code")
+        violations = engine(plan, discrepancy_code=discrepancy)
 
         def check(payload: dict[str, Any]) -> list[str]:
             expected = "vetoed" if violations else "approved"
@@ -75,6 +80,7 @@ def make_validation_handler(db: Any, model: Any):
             workflow_id=envelope["workflow_id"],
             work_package_id=envelope["work_package_id"],
             trace_id=envelope["trace_id"],
+            source_event_id=envelope["event_id"],
             payload_check=check,
         )
         writes.outbox_messages.append(result)

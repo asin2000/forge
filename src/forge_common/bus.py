@@ -96,6 +96,18 @@ class TxnWrites:
     #: applied atomically with the rest of the plan; skipped when the package
     #: is no longer ASSIGNED under the expected owner.
     work_package_status_updates: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    #: A specialist's ENTIRE package-scoped result under ONE ownership guard:
+    #: {work_package_id, expected_owner, status, outbox_messages, audit_events}.
+    #: If the package is no longer ASSIGNED under expected_owner at commit
+    #: time, NOTHING in the bundle commits — a reassigned worker cannot
+    #: publish a stale result, audit, or status.
+    owned_effects: dict[str, Any] | None = None
+    #: Conditional non-reserve failure disposition: {work_package_id,
+    #: failed_instance_id, transition, audit_event}. The package is
+    #: transactionally re-read; if completed/stale the event is consumed with
+    #: zero effects, otherwise package+instance are marked FAILED, the
+    #: workflow blocks, and the escalation audit lands — one transaction.
+    failure_disposition: dict[str, Any] | None = None
 
 
 def _audit_rejection(
@@ -250,7 +262,21 @@ def process_message(
     try:
         writes = TxnWrites()
         handler(message, writes)
-        for audit in writes.audit_events:
+        # Validate EVERY nested message — including those inside the
+        # conditional bundles — before the transaction (ICD-2).
+        bundled_audits = list(writes.audit_events)
+        bundled_outbox = list(writes.outbox_messages)
+        if writes.owned_effects is not None:
+            bundled_audits += writes.owned_effects.get("audit_events", [])
+            bundled_outbox += writes.owned_effects.get("outbox_messages", [])
+        if writes.failure_disposition is not None:
+            bundled_audits.append(writes.failure_disposition["audit_event"])
+        for reassignment in writes.reassignments:
+            if reassignment.get("audit_event"):
+                bundled_audits.append(reassignment["audit_event"])
+            if reassignment.get("assignment_message"):
+                bundled_outbox.append(reassignment["assignment_message"])
+        for audit in bundled_audits:
             # Handler-supplied audit events are full bus messages: validate
             # the contract, pin them to the consumed message's workflow (ICD-2).
             if validate_message(audit) != "audit_event.v2":
@@ -263,7 +289,7 @@ def process_message(
                     "audit_event.v2",
                     [f"audit event workflow_id != consumed message workflow {workflow_id}"],
                 )
-        for out in writes.outbox_messages:
+        for out in bundled_outbox:
             validate_message(out)
             if out["envelope"]["workflow_id"] != workflow_id:
                 raise ContractViolation(
@@ -291,6 +317,31 @@ def process_message(
                 registry.check_wp_status_update(txn, db, workflow_id=workflow_id, **u)
                 for u in writes.work_package_status_updates
             ]
+            owned_plan = None
+            if writes.owned_effects is not None:
+                owned_plan = registry.check_wp_status_update(
+                    txn,
+                    db,
+                    workflow_id=workflow_id,
+                    work_package_id=writes.owned_effects["work_package_id"],
+                    expected_owner=writes.owned_effects["expected_owner"],
+                )
+            disposition_plan = None
+            if writes.failure_disposition is not None:
+                if writes.transition is not None:
+                    raise ValueError("transition and failure_disposition are exclusive")
+                disposition_plan = registry.check_failure_disposition(
+                    txn, db, workflow_id=workflow_id, **writes.failure_disposition
+                )
+                if not disposition_plan["skip"]:
+                    # The disposition's workflow block applies here, before
+                    # any other write, preserving reads-before-writes.
+                    state.apply_transition(
+                        txn,
+                        db,
+                        workflow_id=workflow_id,
+                        **writes.failure_disposition["transition"],
+                    )
             if writes.transition is not None:
                 state.apply_transition(txn, db, workflow_id=workflow_id, **writes.transition)
             for claim in writes.work_package_claims:
@@ -302,6 +353,37 @@ def process_message(
             for update, plan in zip(writes.work_package_status_updates, status_plans, strict=True):
                 registry.apply_wp_status_update(
                     txn, db, workflow_id=workflow_id, **update, plan=plan
+                )
+            if (
+                writes.owned_effects is not None
+                and owned_plan is not None
+                and not owned_plan["skip"]
+            ):
+                registry.apply_wp_status_update(
+                    txn,
+                    db,
+                    workflow_id=workflow_id,
+                    work_package_id=writes.owned_effects["work_package_id"],
+                    status=writes.owned_effects["status"],
+                    plan=owned_plan,
+                )
+                for audit in writes.owned_effects.get("audit_events", []):
+                    txn.create(
+                        layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]),
+                        audit,
+                    )
+                for out in writes.owned_effects.get("outbox_messages", []):
+                    txn.create(
+                        layout.outbox_ref(db, workflow_id, out["envelope"]["event_id"]),
+                        {"message": out, "published": False, "enqueued_at": now_iso()},
+                    )
+            if writes.failure_disposition is not None and disposition_plan is not None:
+                registry.apply_failure_disposition(
+                    txn,
+                    db,
+                    workflow_id=workflow_id,
+                    **writes.failure_disposition,
+                    plan=disposition_plan,
                 )
             txn.set(
                 marker_ref,
