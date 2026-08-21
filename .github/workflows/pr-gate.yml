@@ -121,3 +121,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: "false"
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          # .gitleaks.toml uses global [[allowlists]] with condition=AND,
+          # which requires gitleaks >= 8.25 (the action's default 8.24
+          # silently ignores it and the fixture allowlist stops applying).
+          GITLEAKS_VERSION: "8.30.1"
