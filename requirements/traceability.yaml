@@ -32,8 +32,12 @@ requirements:
   ORC-5:
     implemented_by:
       - contracts/state/workflow_state.v1.schema.json
+      - src/forge_common/state.py
+      - src/forge_common/clock.py
+      - src/forge_common/layout.py
       - pending
     verified_by:
+      - tests/test_state_and_messaging.py
       - pending
     verification_method: test
   AGT-1:
@@ -115,9 +119,11 @@ requirements:
   HUM-1:
     implemented_by:
       - contracts/approval_decision.v1.schema.json
+      - src/forge_common/state.py
       - pending
     verified_by:
       - tests/test_contracts.py
+      - tests/test_state_and_messaging.py
       - pending
     verification_method: test
   HUM-2:
@@ -131,23 +137,30 @@ requirements:
   AUD-1:
     implemented_by:
       - contracts/audit_event.v1.schema.json
+      - src/forge_common/audit.py
       - pending
     verified_by:
       - tests/test_contracts.py
+      - tests/test_state_and_messaging.py
       - pending
     verification_method: test
   AUD-2:
     implemented_by:
-      - pending
+      - src/forge_common/state.py
+      - src/forge_common/bus.py
+      - src/forge_common/layout.py
     verified_by:
+      - tests/test_state_and_messaging.py
       - pending
     verification_method: test
   AUD-3:
     implemented_by:
       - contracts/audit_event.v1.schema.json
+      - src/forge_common/audit.py
       - pending
     verified_by:
       - tests/test_contracts.py
+      - tests/test_state_and_messaging.py
       - pending
     verification_method: test
   ICD-1:
@@ -171,19 +184,24 @@ requirements:
   ICD-4:
     implemented_by:
       - contracts/envelope.v2.schema.json
+      - src/forge_common/messages.py
     verified_by:
       - tests/test_contracts.py
     verification_method: test
   ICD-5:
     implemented_by:
+      - src/forge_common/bus.py
       - pending
     verified_by:
+      - tests/test_state_and_messaging.py
       - pending
     verification_method: test
   ICD-6:
     implemented_by:
+      - tests/test_state_and_messaging.py
       - pending
     verified_by:
+      - tests/test_state_and_messaging.py
       - pending
     verification_method: test
   PLT-1:
@@ -409,8 +427,10 @@ requirements:
     implemented_by:
       - contracts/envelope.v2.schema.json
       - src/forge_common/contracts.py
+      - src/forge_common/bus.py
     verified_by:
       - tests/test_contracts.py
+      - tests/test_state_and_messaging.py
       - pending
     verification_method: test
   DAT-3:

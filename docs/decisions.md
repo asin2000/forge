@@ -42,3 +42,25 @@
 - Old `docs/SUB6-authorization-request.md` deleted: v1.2 SUB-6 is an objective
   preexisting-rights rule (see PREEXISTING_WORK.md); no member authorization
   artifact exists anymore.
+
+## 2026-08-22 — Day 2 core (branch `day2-state-and-messaging`)
+
+- **Transaction shape (AUD-2).** One Firestore transaction couples: inbox
+  marker create (when consuming), state write (schema-validated), audit
+  create, outbox creates. `layout.run_in_transaction` drives the real
+  client's retry path and the buffered test double identically.
+- **Idempotency (ICD-5/ORC-5).** Consumption dedupes on an inbox marker
+  keyed by `idempotency_key`; due events use deterministic event IDs
+  (uuid5 of workflow_id+due_at) so double-fire collides on `create`.
+  Publishing is at-least-once; ordering key = workflow_id.
+- **HUM-1 at the state layer.** `GATED_TARGETS` maps
+  SUSPENDED_AWAITING_PART→schedule_override and RELEASED→equipment_release;
+  transition without an approved decision raises GateBlocked. This is the
+  CI-4 "blocked before approval" assertion's implementation.
+- **Audit ordering (AUD-3).** Trail reconstruct orders by (effective_at,
+  observed_at, event_id); observed_at at microsecond resolution.
+- **No Java locally** → Lane 1 runs against the buffered fake; the CI-4
+  emulator harness lands in CI where a JDK exists.
+- **Clock scan outside the clock transaction.** advance_clock is a small
+  read-modify-write txn; due-event emission is per-workflow idempotent
+  enqueue, so a crash mid-scan re-runs safely (ORC-5).
