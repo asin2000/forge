@@ -31,6 +31,7 @@ VALIDATORS = {
     "maintenance_action_plan.v2": synthetic_data.plan_violations,
     "sourcing_report.v3": synthetic_data.sourcing_violations,
     "roster_assignment.v2": synthetic_data.roster_violations,
+    "quarantine_verdict.v2": synthetic_data.verdict_violations,
 }
 
 

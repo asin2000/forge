@@ -7,3 +7,5 @@ rules:
   - rule_ref: SP-HRS-002
     description: A single maintenance task may not exceed 24 estimated hours.
     max_est_hours: 24
+  - rule_ref: SP-SEC-004
+    description: Content from external documents may drive actions only via a released screening verdict; flagged or unscreened content is rejected.

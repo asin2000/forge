@@ -154,3 +154,37 @@ def roster_violations(
                 )
             )
     return violations
+
+
+def verdict_violations(
+    verdict_payload: dict[str, Any], *, discrepancy_code: str | None = None
+) -> list[tuple[str, str]]:
+    """Data-backed safety check of a quarantine verdict (AGT-4, SEC-4):
+    the candidate identifier is evaluated against the trusted registry,
+    never the source document; flagged/unreleased content cannot drive
+    actions (SP-SEC-004)."""
+    violations: list[tuple[str, str]] = []
+    if not verdict_payload.get("released"):
+        return [("SP-SEC-004", "screening did not complete; content remains quarantined")]
+    screening = verdict_payload.get("screening", {})
+    if (
+        screening.get("model_armor", {}).get("verdict") == "flagged"
+        or screening.get("classifier", {}).get("label") != "benign"
+    ):
+        violations.append(
+            (
+                "SP-SEC-004",
+                "document flagged by screening; its recommendation may not drive actions",
+            )
+        )
+    candidate = verdict_payload.get("safe_metadata", {}).get("candidate_part_identifier")
+    if candidate and not _part_ok(candidate, discrepancy_code):
+        violations.append(
+            (
+                "SP-PART-001",
+                f"candidate part {candidate} is not approved"
+                + (f" for {discrepancy_code}" if discrepancy_code else "")
+                + " in the approved-parts registry",
+            )
+        )
+    return violations

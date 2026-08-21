@@ -1194,3 +1194,118 @@ def test_reserve_unavailable_barrier_real_client(db):
     wp = workflow_ref.collection("work_packages").document(wp_id).get().to_dict()
     assert wp["status"] == "COMPLETED"
     assert registry.instance_ref(db, "agent-workforce-01").get().to_dict()["state"] != "FAILED"
+
+
+def test_day5_scene1_quarantine_pipeline_real_client(db):
+    """Day 5 exit on REAL Firestore: bulletin quarantined -> screened ->
+    verdict-only publication -> Safety veto; raw text exists nowhere outside
+    the quarantine collection; fail-closed proven."""
+    from pathlib import Path as _Path
+
+    from services.cyber_trust.handlers import ingest_document, screen_document
+    from services.safety.handlers import make_validation_handler
+
+    from adk_stub import stub_json
+    from forge_common.quarantine import FirestoreQuarantineStore
+
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+    store = FirestoreQuarantineStore(db, bucket="forge-quarantine-demo")
+    bulletin = (
+        _Path(__file__).resolve().parents[2] / "data" / "vendor_bulletin_vnd_act_9901.txt"
+    ).read_text()
+    marker = "SYSTEM OVERRIDE"
+    doc_id = f"vsb-{wf.removeprefix('wf-')}"
+
+    ingest_document(
+        db,
+        store,
+        workflow_id=wf,
+        doc_id=doc_id,
+        raw_text=bulletin,
+        source="vendor-email",
+        trace_id=trace,
+    )
+    classification = {
+        "label": "malicious",
+        "confidence": 0.97,
+        "candidate_part_identifier": "VND-ACT-9901",
+        "rationale": "Embedded override instructions targeting automated systems.",
+    }
+    verdict = screen_document(
+        db,
+        store,
+        doc_id,
+        armor=lambda text: {"verdict": "flagged", "categories": ["pi_and_jailbreak"]},
+        classifier_model=stub_json(classification),
+        classifier_model_id="gemini-3.5-flash",
+        trace_id=trace,
+    )
+    assert verdict is not None
+    assert verdict["payload"]["safe_metadata"]["candidate_part_identifier"] == "VND-ACT-9901"
+
+    vetoing = stub_json(
+        {
+            "subject_event_id": verdict["envelope"]["event_id"],
+            "verdict": "vetoed",
+            "rule_refs": ["SP-PART-001", "SP-SEC-004"],
+            "reasons": [
+                "VND-ACT-9901 is not in the approved-parts registry.",
+                "Document was flagged by screening.",
+            ],
+        }
+    )
+    assert process_message(
+        db, verdict, make_validation_handler(db, vetoing), consumer_identity="forge-safety"
+    )
+    workflow_ref = db.collection("workflows").document(wf)
+    safety_verdicts = [
+        d.to_dict()["message"]
+        for d in workflow_ref.collection("outbox").stream()
+        if d.to_dict()["message"]["envelope"]["schema_version"] == "validation_verdict.v2"
+    ]
+    assert safety_verdicts and safety_verdicts[0]["payload"]["verdict"] == "vetoed"
+
+    # SEC-4 on the real client: raw text nowhere outside quarantine/.
+    import json as _json
+
+    for collection in ("outbox", "audit", "work_packages", "inbox"):
+        for snapshot in workflow_ref.collection(collection).stream():
+            assert marker not in _json.dumps(snapshot.to_dict(), default=str)
+    assert marker not in _json.dumps(workflow_ref.get().to_dict(), default=str)
+    assert marker in store.get(doc_id)["raw_text"]
+
+    # Fail-closed on the real client: broken armor leaves a second document
+    # quarantined with an audited failure and no verdict.
+    doc2 = f"vsb2-{wf.removeprefix('wf-')}"
+    ingest_document(
+        db,
+        store,
+        workflow_id=wf,
+        doc_id=doc2,
+        raw_text=bulletin,
+        source="vendor-email",
+        trace_id=trace,
+    )
+
+    def broken(text):
+        raise ConnectionError("armor endpoint unavailable")
+
+    assert (
+        screen_document(
+            db,
+            store,
+            doc2,
+            armor=broken,
+            classifier_model=stub_json(classification),
+            classifier_model_id="gemini-3.5-flash",
+            trace_id=trace,
+        )
+        is None
+    )
+    assert store.get(doc2)["status"] == "QUARANTINED"
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, wf)]
+    assert "SCREENING_FAILED" in reasons
