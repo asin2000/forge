@@ -1,0 +1,12 @@
+# CI-7 secrets-scan config. Fail-closed with one reviewed exception:
+# `idempotency_key` is an ICD-4 envelope field in synthetic contract fixtures
+# (SUB-5 — all data synthetic), not a credential. The allowlist matches ONLY
+# the fixture value shape `idem-<type>-<nnnn>`; any other string that trips a
+# rule still fails the gate.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "ICD-4 idempotency_key in synthetic contract example fixtures"
+regexTarget = "line"
+regexes = ['''"idempotency_key": "idem-[a-z0-9_]+-[0-9]{4}"''']
