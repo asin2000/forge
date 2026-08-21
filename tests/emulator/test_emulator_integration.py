@@ -253,3 +253,102 @@ def test_subscription_carries_dlq_policy():
     assert config.dead_letter_policy.max_delivery_attempts == 5
     assert config.dead_letter_policy.dead_letter_topic.endswith(f"{topic}-dlq")
     assert config.enable_message_ordering
+
+
+def test_concurrent_claim_contention_real_client(db):
+    """Two workers contend for one delivery on REAL Firestore: the second
+    sees the live claim and must NACK; the handler runs exactly once."""
+    import threading
+
+    from forge_common.bus import DeliveryInProgress
+
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-10", trace_id=trace, logical_time=0
+    )
+    message = build_due_event(workflow_id=wf, trace_id=trace, due_at=21)
+    entered, release = threading.Event(), threading.Event()
+    runs, results = [], {}
+
+    def slow_handler(msg, writes):
+        runs.append("A")
+        entered.set()
+        assert release.wait(timeout=30)
+
+    def worker_a():
+        results["a"] = process_message(db, message, slow_handler, consumer_identity="forge-supply")
+
+    thread = threading.Thread(target=worker_a)
+    thread.start()
+    assert entered.wait(timeout=30)
+    # Worker B arrives while A's handler is mid-flight and A's lease is live.
+    with pytest.raises(DeliveryInProgress):
+        process_message(
+            db, message, lambda m, w: runs.append("B"), consumer_identity="forge-supply"
+        )
+    release.set()
+    thread.join(timeout=30)
+    assert results["a"] is True
+    assert runs == ["A"]
+    # After completion the marker is done: duplicates return False.
+    assert (
+        process_message(db, message, lambda m, w: None, consumer_identity="forge-supply") is False
+    )
+
+
+def test_expired_lease_takeover_discards_stale_plan_real_client(db):
+    """On REAL Firestore: a worker whose lease expired mid-handler loses the
+    claim; the takeover worker's plan commits, the stale plan is discarded."""
+    import threading
+
+    from forge_common.audit import build_audit_event
+
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-11", trace_id=trace, logical_time=0
+    )
+    message = build_due_event(workflow_id=wf, trace_id=trace, due_at=21)
+    a_entered, a_release = threading.Event(), threading.Event()
+    results = {}
+
+    def audit_for(reason):
+        return build_audit_event(
+            workflow_id=wf,
+            trace_id=trace,
+            agent_identity="forge-supply",
+            event_kind="decision",
+            reason_code=reason,
+            input_obj={},
+            output_obj={},
+            effective_at=0,
+        )
+
+    def stale_handler(msg, writes):
+        a_entered.set()
+        assert a_release.wait(timeout=30)
+        writes.audit_events.append(audit_for("STALE_PLAN"))
+
+    def worker_a():
+        # Zero-second lease: expired the moment it is granted.
+        results["a"] = process_message(
+            db, message, stale_handler, consumer_identity="forge-supply", lease_seconds=0
+        )
+
+    thread = threading.Thread(target=worker_a)
+    thread.start()
+    assert a_entered.wait(timeout=30)
+    # Worker B takes over the expired claim and completes while A is blocked.
+    results["b"] = process_message(
+        db,
+        message,
+        lambda m, w: w.audit_events.append(audit_for("FRESH_PLAN")),
+        consumer_identity="forge-supply",
+    )
+    a_release.set()
+    thread.join(timeout=30)
+    assert results["b"] is True
+    assert results["a"] is False  # stale plan discarded at commit
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, wf)]
+    assert "FRESH_PLAN" in reasons and "STALE_PLAN" not in reasons

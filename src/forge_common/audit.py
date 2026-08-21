@@ -11,6 +11,7 @@ the same transaction as the state change they describe (AUD-2) — see
 from __future__ import annotations
 
 import datetime
+import json
 from typing import Any
 
 from forge_common.contracts import validate_message
@@ -71,3 +72,29 @@ def build_audit_event(
     }
     validate_message(message)
     return message
+
+
+AUDIT_DETAIL_MAX = 1000  # audit_event.v2 payload.detail maxLength
+
+
+def bounded_json_detail(obj: dict[str, Any], limit: int = AUDIT_DETAIL_MAX) -> str:
+    """JSON detail string guaranteed to fit the audit_event.v2 cap.
+
+    A maximum-length approval ``comment`` (1000 chars) would overflow the
+    1000-char ``detail`` once JSON-wrapped: oversize comments are dropped
+    first (flagged ``comment_omitted``), and the last resort is a minimal
+    marker — the detail stays parseable JSON in every case.
+    """
+    text = json.dumps(obj, sort_keys=True)
+    if len(text) <= limit:
+        return text
+    trimmed = dict(obj)
+    approval = trimmed.get("approval")
+    if isinstance(approval, dict) and "comment" in approval:
+        approval = {k: v for k, v in approval.items() if k != "comment"}
+        approval["comment_omitted"] = True
+        trimmed["approval"] = approval
+        text = json.dumps(trimmed, sort_keys=True)
+        if len(text) <= limit:
+            return text
+    return json.dumps({"detail_omitted": True, "reason": "exceeds audit detail limit"})

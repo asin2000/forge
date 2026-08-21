@@ -22,11 +22,10 @@ reconstruction across the time skip is unambiguous (AUD-3).
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from forge_common import layout
-from forge_common.audit import build_audit_event, now_iso
+from forge_common.audit import bounded_json_detail, build_audit_event, now_iso
 from forge_common.contracts import validate_message
 
 # Spine states (workflow_state.v1 enum). AWAITING_RELEASE_APPROVAL ->
@@ -93,7 +92,7 @@ def record_approval_decision(db: Any, message: dict[str, Any]) -> str:
             input_obj=payload,
             output_obj={"recorded": True},
             effective_at=int(clock_doc["logical_time"]) if clock_doc else 0,
-            detail=json.dumps({"approval": payload}),
+            detail=bounded_json_detail({"approval": payload}),
         )
         txn.create(
             layout.approval_ref(db, workflow_id, payload["approval_id"]),
@@ -211,7 +210,7 @@ def apply_transition(
         audit_input["approval"] = evidence
         # HUM-1: the approval evidence must reconstruct from Firestore alone —
         # recorded verbatim, not only inside the input hash.
-        audit_detail = json.dumps({"approval": evidence, "detail": detail})
+        audit_detail = bounded_json_detail({"approval": evidence, "detail": detail})
     audit = build_audit_event(
         workflow_id=workflow_id,
         trace_id=trace_id,

@@ -1,5 +1,10 @@
-"""Pub/Sub transport adapter: ordered publisher and DLQ-configured
-subscriptions (ICD-5).
+"""Pub/Sub transport adapter: ordered publisher, DLQ-configured
+subscriptions, and DAT-1 regional residency (ICD-5, DAT-1).
+
+Outside the emulator, clients pin the regional endpoint
+(``pubsub.<region>.rep.googleapis.com``) and topics carry the regional
+message-storage policy with ``enforce_in_transit`` — the DAT-1 map's
+Pub/Sub half. CI-9 validates the deploy config against the map.
 
 ``OrderedPublisher`` publishes bus messages with message ordering enabled and
 the ordering key supplied by the caller (``drain_outbox`` passes the
