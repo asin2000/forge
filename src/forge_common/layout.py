@@ -94,6 +94,11 @@ def inbox_ref(db: Any, workflow_id: str, idempotency_key: str) -> Any:
     return workflow_ref(db, workflow_id).collection("inbox").document(idempotency_key)
 
 
+def work_package_ref(db: Any, workflow_id: str, work_package_id: str) -> Any:
+    """Exclusive-ownership record for one work package (ORC-1)."""
+    return workflow_ref(db, workflow_id).collection("work_packages").document(work_package_id)
+
+
 def clock_ref(db: Any) -> Any:
     return db.collection(CLOCK_DOC[0]).document(CLOCK_DOC[1])
 

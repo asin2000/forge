@@ -41,7 +41,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from forge_common import layout, state
+from forge_common import layout, registry, state
 from forge_common.audit import build_audit_event, now_iso
 from forge_common.contracts import ContractViolation, validate_message
 from forge_common.messages import sha256_hex
@@ -83,6 +83,10 @@ class TxnWrites:
     transition: dict[str, Any] | None = None
     audit_events: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     outbox_messages: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    #: exclusive work-package ownership claims (ORC-1) — kwargs for
+    #: registry.claim_work_package minus db/workflow_id; applied in the
+    #: committing transaction, colliding if the package already has an owner.
+    work_package_claims: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
 def _audit_rejection(
@@ -268,6 +272,8 @@ def process_message(
                 return False  # claim lost to a takeover — the holder will commit
             if writes.transition is not None:
                 state.apply_transition(txn, db, workflow_id=workflow_id, **writes.transition)
+            for claim in writes.work_package_claims:
+                registry.claim_work_package(txn, db, workflow_id=workflow_id, **claim)
             txn.set(
                 marker_ref,
                 {**current, "status": "done", "processed_observed_at": now_iso()},
