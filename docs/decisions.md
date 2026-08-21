@@ -246,3 +246,27 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   actual roster verdicts tested.
 - All bundle-nested audit/outbox messages are contract-validated BEFORE the
   transaction, like every other effect.
+
+## 2026-08-25 — Day 5: quarantine-first screening pipeline (SEC-1..4)
+
+- **Quarantine store**: canonical gs:// URIs per the verdict contract;
+  demo/emulator bytes live in the Firestore `quarantine` collection under
+  the same IDs; Day 6 deploy binds the actual GCS bucket with bucket-level
+  IAM (Cyber Trust SA read-only) — the AGT-5 access negative test is a
+  Lane 2 live-IAM check, since collection-level isolation is not
+  server-SDK-enforceable inside one Firestore database.
+- **`released` semantics** (frozen contract, documented interpretation):
+  True = the pipeline COMPLETED without error (SEC-2); flagged/malicious
+  results still publish (released:true) so Safety can reject the
+  identifier — the spine's Scene 1 requires exactly this. Errors →
+  released:false, and the schema itself forbids safe_metadata then.
+- **Classifier constraints (SEC-3/SEC-4)**: tool-less ADK agent
+  (structural test asserts zero tools); candidate_part_identifier is
+  schema-constrained to the identifiers the bounded parser actually
+  extracted — the model cannot invent one (invention exhausts retries and
+  fails closed).
+- **Safety consumes verdicts**: VALIDATORS gains quarantine_verdict.v2 —
+  SP-SEC-004 (flagged/unreleased content cannot drive actions) + SP-PART-001
+  (candidate evaluated against the trusted registry, never the document).
+- Model Armor adapter mirrors the proven smoke REST call; live exercised by
+  the smoke + Lane 2 (CI-6); unit/emulator stub it.
