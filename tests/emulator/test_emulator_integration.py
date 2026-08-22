@@ -165,8 +165,8 @@ def test_due_event_double_fire_on_real_client(db):
         due_at=21,
     )
     advance_clock(db, 21)
-    first = emit_due_events(db, trace_id=trace)
-    second = emit_due_events(db, trace_id=trace)
+    first = emit_due_events(db)
+    second = emit_due_events(db)
     assert wf in first and wf not in second
 
 
@@ -1509,7 +1509,37 @@ def test_day6_dashboard_gate_loop_real_client(db):
         {"message": sourcing, "published": False, "enqueued_at": now_iso()}
     )
 
+    # completion evidence for the release path: a real roster in the outbox
+    roster = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            work_package_id=f"wp-workforce-{wf.removeprefix('wf-')}"[:40],
+            schema_version="roster_assignment.v2",
+            event_id=deterministic_event_id("emu-roster", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-emu-roster-{wf[-8:]}",
+        ),
+        "payload": {
+            "assignments": [
+                {
+                    "task_code": "TC-101",
+                    "technician_id": "T-1001",
+                    "qualification_id": "Q-HYD-101",
+                    "shift": "day",
+                }
+            ]
+        },
+    }
+    validate_message(roster)
+    layout.outbox_ref(db, wf, roster["envelope"]["event_id"]).set(
+        {"message": roster, "published": False, "enqueued_at": now_iso()}
+    )
+
     def verdict(subject):
+        subject_event_id = {
+            "plan": sourcing["envelope"]["event_id"],
+            "repair": roster["envelope"]["event_id"],
+        }[subject]
         message = {
             "envelope": build_envelope(
                 workflow_id=wf,
@@ -1519,7 +1549,7 @@ def test_day6_dashboard_gate_loop_real_client(db):
                 idempotency_key=f"idem-emu-verdict-{subject}-{wf[-8:]}",
             ),
             "payload": {
-                "subject_event_id": deterministic_event_id("emu-subject", wf, subject),
+                "subject_event_id": subject_event_id,
                 "verdict": "approved",
                 "rule_refs": ["SP-PART-001"],
                 "reasons": ["approved parts only"],
@@ -1620,3 +1650,255 @@ def test_day6_dashboard_gate_loop_real_client(db):
         for s in db.collection("workflows").document(wf).collection("audit").stream()
     }
     assert audit_traces == {trace}
+
+
+# ---------- Day 7: the FULL spine, bus-mediated, on the real clients ----------
+
+
+def test_day7_full_spine_bus_mediated_real_client(db):
+    """Day 7 exit: NMC -> RELEASED with EVERY hop riding the real Pub/Sub
+    topic (outbox drain -> ordered publish -> pull -> consumer dispatch with
+    per-consumer dedupe) against real Firestore, with IMMEDIATE delivery
+    (live shape): the roster executes during validation and its recorded
+    verdict is re-keyed at resume to open the release gate. Asserts the ordered
+    state history, the 21-logical-day suspension, ONE trace across every
+    message and audit event, and both HUM-1 gates consumed exactly once."""
+    from fastapi.testclient import TestClient
+    from google.cloud import pubsub_v1
+    from services.dashboard.app import create_app
+    from services.maintenance.handlers import make_handler as make_maintenance
+    from services.orchestrator.handlers import (
+        make_decision_handler,
+        make_due_handler,
+        make_nmc_handler,
+        make_plan_handler,
+        make_sourcing_report_handler,
+        make_verdict_handler,
+    )
+    from services.safety.handlers import make_validation_handler
+    from services.supply.handlers import make_handler as make_supply
+    from services.workforce.handlers import make_handler as make_workforce
+
+    from adk_stub import stub_json
+    from forge_common import layout, registry
+    from forge_common.clock import advance_clock, emit_due_events
+    from forge_common.contracts import validate_message
+
+    registry.load_registry(db)
+    reset_specialist_instances(db)
+    reset_workforce_instances(db)
+    layout.clock_ref(db).set({"logical_time": 0})
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-07", trace_id=trace, logical_time=0
+    )
+
+    topic = f"forge-spine-{uuid.uuid4().hex[:8]}"
+    sub = f"{topic}-sub"
+    ensure_topic_and_subscription(PROJECT, topic, sub)
+    publisher = OrderedPublisher(PROJECT)
+    subscriber = pubsub_v1.SubscriberClient()
+    sub_path = subscriber.subscription_path(PROJECT, sub)
+
+    decomposition = {
+        "objectives": {
+            "maintenance": "Plan replacement of the failed hydraulic actuator.",
+            "supply": "Source the approved actuator and report shipment status.",
+        }
+    }
+    plan_payload = {
+        "plan_id": "plan-spine-emu",
+        "equipment_id": "GX12-07",
+        "tasks": [
+            {
+                "task_code": "TC-101",
+                "title": "Replace actuator",
+                "est_hours": 6.5,
+                "parts_required": [{"part_number": "HYD-ACT-4402", "qty": 1}],
+            }
+        ],
+    }
+    sourcing_payload = {
+        "part_number": "HYD-ACT-4402",
+        "part_approved": True,
+        "shipment_status": "delayed",
+        "eta_days": 21,
+    }
+    roster_payload = {
+        "assignments": [
+            {
+                "task_code": "TC-101",
+                "technician_id": "T-1001",
+                "qualification_id": "Q-HYD-101",
+                "shift": "day",
+            }
+        ]
+    }
+
+    def verdict_stub_for(subject_event_id):
+        return stub_json(
+            {
+                "subject_event_id": subject_event_id,
+                "verdict": "approved",
+                "rule_refs": ["SP-PART-001", "SP-HRS-002"],
+                "reasons": ["All parts approved for DSC-0042; hours within bounds."],
+            }
+        )
+
+    orch = "forge-orchestrator"
+    nmc_handler = make_nmc_handler(db, model=stub_json(decomposition))
+    plan_handler = make_plan_handler(db)
+    verdict_handler = make_verdict_handler(db)
+    decision_handler = make_decision_handler(db)
+    due_handler = make_due_handler(db)
+    sourcing_handler = make_sourcing_report_handler(db)
+    bus_hops = []
+
+    def wf_status():
+        return layout.workflow_ref(db, wf).get().to_dict()["status"]
+
+    def dispatch(message):
+        validate_message(message)
+        schema = message["envelope"]["schema_version"]
+        bus_hops.append(schema)
+        if schema == "work_package_assignment.v2":
+            role = message["payload"]["role"]
+            handler = {
+                "maintenance": lambda: make_maintenance(db, stub_json(plan_payload)),
+                "supply": lambda: make_supply(db, stub_json(sourcing_payload)),
+                "workforce": lambda: make_workforce(db, stub_json(roster_payload)),
+            }[role]()
+            process_message(db, message, handler, consumer_identity=f"forge-{role}")
+        elif schema == "maintenance_action_plan.v2":
+            process_message(db, message, plan_handler, consumer_identity=orch)
+            process_message(
+                db,
+                message,
+                make_validation_handler(db, verdict_stub_for(message["envelope"]["event_id"])),
+                consumer_identity="forge-safety",
+            )
+        elif schema == "sourcing_report.v3":
+            process_message(db, message, sourcing_handler, consumer_identity=orch)
+            process_message(
+                db,
+                message,
+                make_validation_handler(db, verdict_stub_for(message["envelope"]["event_id"])),
+                consumer_identity="forge-safety",
+            )
+        elif schema == "roster_assignment.v2":
+            process_message(
+                db,
+                message,
+                make_validation_handler(db, verdict_stub_for(message["envelope"]["event_id"])),
+                consumer_identity="forge-safety",
+            )
+        elif schema == "validation_verdict.v2":
+            process_message(db, message, verdict_handler, consumer_identity=orch)
+        elif schema == "approval_decision.v2":
+            process_message(db, message, decision_handler, consumer_identity=orch)
+        elif schema == "due_event.v2":
+            process_message(db, message, due_handler, consumer_identity=orch)
+        # approval_request.v2 is consumed by the human surface, not the bus
+
+    def pump(max_rounds=40):
+        for _ in range(max_rounds):
+            drained = drain_outbox(db, wf, lambda m, key: publisher.publish(topic, m, key))
+            response = subscriber.pull(request={"subscription": sub_path, "max_messages": 50})
+            if not drained and not response.received_messages:
+                return
+            for rm in response.received_messages:
+                dispatch(json.loads(rm.message.data))
+                subscriber.acknowledge(request={"subscription": sub_path, "ack_ids": [rm.ack_id]})
+        raise AssertionError("pump did not quiesce")
+
+    # the NMC event itself arrives via the bus
+    nmc = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            schema_version="nmc_event.v2",
+            event_id=deterministic_event_id("emu-spine-nmc", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-emu-spine-nmc-{wf[-8:]}",
+        ),
+        "payload": {
+            "equipment_id": "GX12-07",
+            "discrepancy_code": "DSC-0042",
+            "description": "Failed hydraulic actuator on lift assembly",
+            "reported_at": "2026-08-21T09:00:00Z",
+        },
+    }
+    publisher.publish(topic, nmc, wf)
+    response = subscriber.pull(request={"subscription": sub_path, "max_messages": 1})
+    (rm,) = response.received_messages
+    process_message(db, json.loads(rm.message.data), nmc_handler, consumer_identity=orch)
+    subscriber.acknowledge(request={"subscription": sub_path, "ack_ids": [rm.ack_id]})
+
+    pump()
+    assert wf_status() == "AWAITING_SCHEDULE_APPROVAL"
+
+    client = TestClient(create_app(db, verifier=lambda token: "approver@example.test"))
+    headers = {"authorization": "Bearer emu-spine-token"}
+
+    def decide(expected_action):
+        (pending,) = client.get(f"/api/workflows/{wf}").json()["pending_approvals"]
+        assert pending["action_type"] == expected_action
+        assert (
+            client.post(
+                f"/api/workflows/{wf}/decide",
+                headers=headers,
+                json={"approval_id": pending["approval_id"], "decision": "approved"},
+            ).status_code
+            == 200
+        )
+        return pending["approval_id"]
+
+    first_approval = decide("schedule_override")
+    pump()
+    doc = layout.workflow_ref(db, wf).get().to_dict()
+    assert (doc["status"], doc["due_at"]) == ("SUSPENDED_AWAITING_PART", 21)
+
+    advance_clock(db, 21)
+    assert emit_due_events(db) == [wf]
+    pump()
+    # immediate delivery: the roster ran during validation; its recorded
+    # verdict was re-keyed at resume — one pump reaches the release gate
+    # (the state-history assertion below proves ASSEMBLY_RESUMED happened)
+    assert wf_status() == "AWAITING_RELEASE_APPROVAL"
+
+    second_approval = decide("equipment_release")
+    pump()
+    assert wf_status() == "RELEASED"
+
+    trail = state.reconstruct_audit_trail(db, wf)
+    states = [e["payload"]["state_after"] for e in trail if e["payload"].get("state_after")]
+    assert states == [
+        "INTAKE",
+        "PLANNING",
+        "VALIDATING",
+        "AWAITING_SCHEDULE_APPROVAL",
+        "SUSPENDED_AWAITING_PART",
+        "ASSEMBLY_RESUMED",
+        "AWAITING_RELEASE_APPROVAL",
+        "RELEASED",
+    ]
+    suspended = next(
+        e for e in trail if e["payload"].get("state_after") == "SUSPENDED_AWAITING_PART"
+    )
+    resumed = next(e for e in trail if e["payload"].get("state_after") == "ASSEMBLY_RESUMED")
+    assert resumed["payload"]["effective_at"] - suspended["payload"]["effective_at"] == 21
+    outbox_msgs = [
+        s.to_dict()["message"]
+        for s in db.collection("workflows").document(wf).collection("outbox").stream()
+    ]
+    audit_traces = {
+        s.to_dict()["envelope"]["trace_id"]
+        for s in db.collection("workflows").document(wf).collection("audit").stream()
+    }
+    assert {m["envelope"]["trace_id"] for m in outbox_msgs} == audit_traces == {trace}
+    for approval_id in (first_approval, second_approval):
+        assert layout.consumed_approval_ref(db, wf, approval_id).get().to_dict() is not None
+    # every spine hop genuinely rode the bus
+    assert bus_hops.count("work_package_assignment.v2") == 3
+    assert bus_hops.count("validation_verdict.v2") >= 2
+    assert "due_event.v2" in bus_hops and bus_hops.count("approval_decision.v2") == 2

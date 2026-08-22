@@ -41,6 +41,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from forge_common.contracts import MESSAGE_TYPES  # noqa: E402
 
+
+def _endpoint_re(run_region: str) -> re.Pattern[str]:
+    """Both canonical Cloud Run URL forms carry the region: the deterministic
+    domain embeds it literally; status.url encodes it as a short code
+    (us-central1 -> uc) in *.a.run.app."""
+    short = "".join(part[0] for part in run_region.split("-"))
+    return re.compile(
+        rf"^https://[a-z0-9-]+(\.{re.escape(run_region)}\.run\.app"
+        rf"|-{re.escape(short)}\.a\.run\.app)$"
+    )
+
+
 SERVICE_ROLES = {"orchestrator", "maintenance", "supply", "workforce", "safety", "cyber_trust"}
 MANIFEST_STATUSES = {"planned", "implemented", "deployed"}
 
@@ -55,7 +67,7 @@ def check_registry(registry: dict, manifest: dict, run_region: str) -> list[str]
         failures.append(f"service role {role} has no registry definition")
     for role in by_role - SERVICE_ROLES:
         failures.append(f"registry definition for unknown service role {role}")
-    endpoint_re = re.compile(rf"^https://[a-z0-9-]+\.{re.escape(run_region)}\.run\.app$")
+    endpoint_re = _endpoint_re(run_region)
     manifest_services = manifest.get("services", {})
     for agent in registry["agents"]:
         agent_id = agent["agent_id"]
@@ -90,7 +102,7 @@ def check_registry(registry: dict, manifest: dict, run_region: str) -> list[str]
 def check_manifest(manifest: dict, registry: dict, residency: dict) -> list[str]:
     failures: list[str] = []
     run_region = residency["locations"]["cloud_run"]
-    endpoint_re = re.compile(rf"^https://[a-z0-9-]+\.{re.escape(run_region)}\.run\.app$")
+    endpoint_re = _endpoint_re(run_region)
     services = manifest.get("services", {})
 
     on_disk = {
@@ -151,6 +163,28 @@ def check_manifest(manifest: dict, registry: dict, residency: dict) -> list[str]
     return failures
 
 
+def check_routing(registry: dict) -> list[str]:
+    """The publisher's ROUTING map and the registry's consumes declarations
+    must agree — a schema routed to a role the registry says does not
+    consume it (or vice versa) is a silent delivery bug."""
+    from forge_common.pubsub import ROUTING
+
+    failures: list[str] = []
+    consumes: dict[str, set[str]] = {}
+    for agent in registry["agents"]:
+        role = agent["agent_id"].removeprefix("forge-").replace("-", "_")
+        consumes[role] = set(agent["contracts"].get("consumes", []))
+    for schema, roles in ROUTING.items():
+        for role in roles:
+            if schema not in consumes.get(role, set()):
+                failures.append(f"ROUTING sends {schema} to {role}, registry does not consume it")
+    for role, schemas in consumes.items():
+        for schema in schemas - {"work_package_assignment.v2"}:
+            if role not in ROUTING.get(schema, ()):
+                failures.append(f"registry: {role} consumes {schema} but ROUTING never delivers it")
+    return failures
+
+
 def check_residency(residency: dict) -> list[str]:
     failures: list[str] = []
     allowed = set(residency["locations"].values()) | {residency["residency_jurisdiction"].lower()}
@@ -177,6 +211,7 @@ def main() -> int:
     failures = (
         check_registry(registry, manifest, residency["locations"]["cloud_run"])
         + check_manifest(manifest, registry, residency)
+        + check_routing(registry)
         + check_residency(residency)
     )
     if failures:

@@ -30,7 +30,8 @@ deploys as its own Cloud Run service with its own service account; boundaries
 are enforced at IAM. External documents pass a quarantine-first pipeline
 (bounded parser → Model Armor → tool-less classifier) and only a structured
 verdict plus tightly-typed safe metadata ever reaches the bus. Reasoning:
-`gemini-3.5-flash` on Vertex AI, single pinned region (`us-central1`).
+`gemini-3.5-flash` on Vertex AI at the DAT-1 map's `us` multi-region
+(everything else pins `us-central1`; see Data residency below).
 
 ## Repository layout
 
@@ -54,13 +55,50 @@ Local (no cloud needed for Lane-1 gates):
     python scripts/check_traceability.py
     ruff check . && pytest
 
-GCP bootstrap (prerequisites: authenticated principal, project ID, billing
-enabled): see `infra/setup-gcp.sh`. Full one-command environment stand-up
-(`deploy.sh`, PLT-6) lands Day 6–7 of the build plan.
+Full environment stand-up is ONE command (PLT-6) — it chains the API/
+Firestore bootstrap, per-role service accounts and scoped IAM, the bus with
+its dead-letter queue, the regional log bucket, the registry load, one
+container build, five agent workers plus the dashboard on Cloud Run
+(`--no-allow-unauthenticated`), filtered push subscriptions, and the
+per-minute heartbeat:
+
+    PROJECT_ID=<id> PYTHON=./.venv/bin/python bash infra/deploy.sh
+
+Prerequisites: authenticated principal WITH Application Default Credentials
+(`gcloud auth application-default login`), billing enabled, CWD = repo
+root, and the local spin-up above (the deploy uses your interpreter for the
+registry load and bus provisioning).
+
+## Data residency & disclosures (DAT-1, DAT-3)
+
+Residency jurisdiction is `US`, governed by the approved location map in
+`infra/residency.yaml` and CI-validated on every PR (CI-9): Cloud Run,
+Firestore, Pub/Sub (regional endpoint, `allowed_persistence_regions`,
+`enforce_in_transit: true`), quarantine storage, Model Armor, and Cloud
+Logging (operational logs in the regional `forge-logs` bucket; the
+`_Default` sink is redirected there) all pin `us-central1`; Gemini runs in
+the `us` multi-region per the map.
+
+Firestore IAM scoping limitation (AGT-6, stated rather than pretended
+away): `roles/datastore.user` is project-scoped — Firestore has no
+per-collection IAM primitive. Compensating controls: state changes flow
+through single sanctioned writer paths (`state.apply_transition`,
+`state.record_approval_decision`), work products commit under transactional
+ownership guards, and every mutation is audited (AUD-1); Pub/Sub, storage,
+Vertex, and Model Armor are scoped per role/resource.
+
+Disclosed exceptions: **Cloud Trace** receives metadata-only telemetry
+(span attributes carry envelope routing fields and outcomes — never
+prompts, model responses, decision-record prose, or document content; see
+`src/forge_common/otel.py` and its OBS-2 tests). The **`_Required`** log
+bucket predates configuration (created with the project, location fixed)
+and holds only Google admin-activity audit entries, never operational
+payload data. FORGE claims no Assured Workloads or IL4 compliance. All
+data is synthetic (SUB-5).
 
 ## Process rules
 
 PRs only — no direct commits to `main` (branch protection). New dependencies
 need a one-line justification in the PR description (DFT-3). Work not
 traceable to a requirement ID is rejected in review (DFT-2). After the Day-8
-freeze (`v1.1-demo` tag), only demo-spine defects merge (DFT-4).
+freeze (`v1.2-demo` tag), only demo-spine defects merge (DFT-4).

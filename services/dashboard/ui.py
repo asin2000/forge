@@ -73,8 +73,8 @@ async function show(id){
    </div>
    ${approvals}
    <div class="panel"><h2>Audit trail — reconstructed from Firestore alone (AUD-2)</h2>
-    <table><tr><th>Day</th><th>Observed</th><th>Kind</th><th>Reason</th><th>Agent</th><th>State</th></tr>
-    ${d.audit_trail.map(e=>`<tr><td>${e.effective_at}</td><td class="mut">${e.observed_at.slice(0,19)}</td><td>${e.event_kind}</td><td>${e.reason_code}</td><td class="mut">${e.agent_identity}</td><td>${e.state_after?tag(e.state_after):''}</td></tr>`).join('')}</table>
+    <table><tr><th>Day</th><th>Observed</th><th>Kind</th><th>Reason</th><th>Agent</th><th>State</th><th>Origin/Trust</th></tr>
+    ${d.audit_trail.map(e=>`<tr><td>${e.effective_at}</td><td class="mut">${e.observed_at.slice(0,19)}</td><td>${e.event_kind}</td><td>${e.reason_code}</td><td class="mut">${e.agent_identity}</td><td>${e.state_after?tag(e.state_after):''}</td><td>${tag(e.data_origin)} ${tag(e.trust_state)}</td></tr>`).join('')}</table>
    </div>`;
 }
 async function decide(wf,apr,decision){

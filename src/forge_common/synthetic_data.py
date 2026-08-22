@@ -84,6 +84,17 @@ def _part_check(
     return []
 
 
+def staffable_task_codes() -> set[str]:
+    """Task codes SOME qualified technician can execute (qualifications.yaml).
+    A plan may only schedule staffable work (AGT-1 grounding / SP-QUAL-001):
+    a task nobody is qualified for is unexecutable by construction."""
+    codes: set[str] = set()
+    for quals in technicians().values():
+        for qual in quals:
+            codes.update(qual.get("task_codes", []))
+    return codes
+
+
 def plan_violations(
     plan_payload: dict[str, Any], *, discrepancy_code: str | None = None
 ) -> list[tuple[str, str]]:
@@ -102,6 +113,14 @@ def plan_violations(
                 (
                     "SP-HRS-002",
                     f"task {task['task_code']} estimates {task['est_hours']}h > {max_hours}h",
+                )
+            )
+        if task.get("task_code") not in staffable_task_codes():
+            violations.append(
+                (
+                    "SP-QUAL-001",
+                    f"task {task.get('task_code')} is not in the staffable task "
+                    f"catalog — no technician holds a qualification for it",
                 )
             )
     return violations

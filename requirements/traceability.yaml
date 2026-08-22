@@ -1,9 +1,22 @@
 # Requirements traceability (DFT-1). CI enforces: every requirement mapped,
 # every production module referenced by at least one requirement.
-# 'pending' is permitted while strict: false; flips to strict: true on Day 7
-# (FORGE-BUILD-PLAN.md), after which pending entries fail CI.
+# strict: true since Day 7 — 'pending' fails CI except for the dated
+# pending_allowed list (items whose evidence cannot exist before their
+# scheduled day; each exemption dies on that day).
 version: 1
-strict: false
+strict: true
+pending_allowed:
+  - CI-6   # WIF auto-deploy: Day 8
+  - CI-8   # 10/10 streak: Day 9
+  - DFT-4  # freeze + v1.2-demo tag: Day 8
+  - PLT-6  # live CLEAN-PROJECT deployment test: Day 8 (idempotent
+           # convergence on the standing project is captured; the fresh-
+           # project run is the requirement's own verify criterion)
+  - SUB-1  # submission artifacts: Days 9-10
+  - SUB-2
+  - SUB-3
+  - SUB-7
+  - SUB-8
 requirements:
   ORC-1:
     implemented_by:
@@ -17,8 +30,8 @@ requirements:
     implemented_by:
       - services/orchestrator/handlers.py
     verified_by:
-      - tests/test_day3_agents.py
-      - pending
+      - tests/test_day7_spine.py
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: inspection
   ORC-3:
     implemented_by:
@@ -38,15 +51,13 @@ requirements:
     verification_method: test
   ORC-5:
     implemented_by:
-      - contracts/state/workflow_state.v1.schema.json
-      - src/forge_common/state.py
       - src/forge_common/clock.py
-      - src/forge_common/layout.py
-      - pending
+      - src/forge_common/state.py
     verified_by:
       - tests/test_state_and_messaging.py
+      - tests/test_day7_spine.py
       - tests/emulator/test_emulator_integration.py
-      - pending
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: test
   AGT-1:
     implemented_by:
@@ -88,13 +99,15 @@ requirements:
       - services/cyber_trust/handlers.py
     verified_by:
       - tests/test_day5_quarantine.py
-      - pending
+      - docs/verification/2026-08-21-day6-live.md
     verification_method: test
   AGT-6:
     implemented_by:
-      - pending
+      - infra/deploy.sh
+      - agents/registry.yaml
     verified_by:
-      - pending
+      - docs/verification/2026-08-21-day6-live.md
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: test
   AGT-7:
     implemented_by:
@@ -162,13 +175,11 @@ requirements:
     verification_method: test
   AUD-1:
     implemented_by:
-      - contracts/audit_event.v2.schema.json
       - src/forge_common/audit.py
-      - pending
+      - src/forge_common/state.py
     verified_by:
-      - tests/test_contracts.py
       - tests/test_state_and_messaging.py
-      - pending
+      - tests/test_day7_spine.py
     verification_method: test
   AUD-2:
     implemented_by:
@@ -177,17 +188,16 @@ requirements:
       - src/forge_common/layout.py
     verified_by:
       - tests/test_state_and_messaging.py
-      - pending
+      - tests/test_day7_spine.py
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: test
   AUD-3:
     implemented_by:
-      - contracts/audit_event.v2.schema.json
       - src/forge_common/audit.py
-      - pending
+      - src/forge_common/clock.py
     verified_by:
-      - tests/test_contracts.py
       - tests/test_state_and_messaging.py
-      - pending
+      - tests/test_day7_spine.py
     verification_method: test
   ICD-1:
     implemented_by:
@@ -218,11 +228,11 @@ requirements:
     implemented_by:
       - src/forge_common/bus.py
       - src/forge_common/pubsub.py
-      - pending
+      - services/worker.py
     verified_by:
-      - tests/test_state_and_messaging.py
       - tests/emulator/test_emulator_integration.py
-      - pending
+      - tests/test_day7_worker.py
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: test
   ICD-6:
     implemented_by:
@@ -235,10 +245,11 @@ requirements:
     verification_method: test
   PLT-1:
     implemented_by:
-      - pending
+      - src/forge_common/agent_base.py
+      - prompts/
     verified_by:
-      - scripts/smoke_vertex.py
-      - pending
+      - docs/verification/2026-08-21-gcp-smoke.md
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: inspection
   PLT-2:
     implemented_by:
@@ -247,13 +258,14 @@ requirements:
     verified_by:
       - tests/test_day3_agents.py
       - scripts/smoke_adk_agent.py
+      - scripts/smoke_vertex.py
     verification_method: test
   PLT-3:
     implemented_by:
-      - infra/setup-gcp.sh
-      - pending
+      - services/worker.py
+      - infra/deploy.sh
     verified_by:
-      - pending
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: inspection
   PLT-4:
     implemented_by:
@@ -276,6 +288,7 @@ requirements:
       - infra/deploy.sh
       - Dockerfile
     verified_by:
+      - docs/verification/2026-08-21-day7-live.md
       - pending
     verification_method: test
   CI-1:
@@ -294,27 +307,29 @@ requirements:
     verification_method: document
   CI-3:
     implemented_by:
-      - pending
+      - .github/workflows/pr-gate.yml
     verified_by:
-      - pending
+      - tests/test_day7_obs.py
     verification_method: document
   CI-4:
     implemented_by:
-      - pending
+      - .github/workflows/pr-gate.yml
     verified_by:
-      - pending
+      - tests/emulator/test_emulator_integration.py
     verification_method: document
   CI-5:
     implemented_by:
-      - pending
+      - .github/workflows/pr-gate.yml
+      - pyproject.toml
     verified_by:
-      - pending
+      - .github/workflows/pr-gate.yml
     verification_method: document
   CI-6:
     implemented_by:
+      - scripts/demo_spine_live.py
       - pending
     verified_by:
-      - pending
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: document
   CI-7:
     implemented_by:
@@ -343,9 +358,9 @@ requirements:
     verification_method: document
   DFT-3:
     implemented_by:
-      - pending
+      - docs/decisions.md
     verified_by:
-      - pending
+      - docs/decisions.md
     verification_method: document
   DFT-4:
     implemented_by:
@@ -381,7 +396,7 @@ requirements:
     implemented_by:
       - PREEXISTING_WORK.md
     verified_by:
-      - pending
+      - PREEXISTING_WORK.md
     verification_method: document
   SUB-5:
     implemented_by:
@@ -393,7 +408,7 @@ requirements:
     implemented_by:
       - PREEXISTING_WORK.md
     verified_by:
-      - pending
+      - PREEXISTING_WORK.md
     verification_method: document
   SUB-7:
     implemented_by:
@@ -412,15 +427,15 @@ requirements:
       - agents/registry.yaml
       - src/forge_common/registry.py
     verified_by:
-      - tests/test_day3_agents.py
-      - pending
+      - tests/test_registry_contracts.py
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: inspection
   REG-2:
     implemented_by:
       - src/forge_common/registry.py
     verified_by:
       - tests/test_day3_agents.py
-      - pending
+      - tests/emulator/test_emulator_integration.py
     verification_method: test
   REG-3:
     implemented_by:
@@ -438,29 +453,35 @@ requirements:
     verification_method: demonstration
   REG-5:
     implemented_by:
-      - pending
+      - src/forge_common/registry.py
+      - scripts/check_config.py
     verified_by:
-      - pending
+      - scripts/check_config.py
+      - tests/test_registry_contracts.py
     verification_method: test
   OBS-1:
     implemented_by:
-      - pending
+      - src/forge_common/otel.py
+      - services/worker.py
     verified_by:
-      - pending
+      - tests/test_day7_obs.py
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: test
   OBS-2:
     implemented_by:
-      - pending
+      - src/forge_common/otel.py
     verified_by:
-      - pending
+      - tests/test_day7_obs.py
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: inspection
   DAT-1:
     implemented_by:
       - infra/residency.yaml
       - src/forge_common/pubsub.py
-      - pending
+      - infra/deploy.sh
     verified_by:
-      - pending
+      - scripts/check_config.py
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: inspection
   DAT-2:
     implemented_by:
@@ -470,14 +491,16 @@ requirements:
     verified_by:
       - tests/test_contracts.py
       - tests/test_state_and_messaging.py
-      - pending
+      - tests/test_day6_dashboard.py
     verification_method: test
   DAT-3:
     implemented_by:
+      - src/forge_common/otel.py
       - infra/residency.yaml
-      - pending
+      - README.md
     verified_by:
-      - pending
+      - tests/test_day7_obs.py
+      - docs/verification/2026-08-21-day7-live.md
     verification_method: inspection
   CI-9:
     implemented_by:

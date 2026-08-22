@@ -3,7 +3,7 @@
 Layout (all demo-scale collections; reconstruction reads these alone, AUD-2):
 
 - ``system/logical_clock``                     {"logical_time": int}
-- ``workflows/{workflow_id}``                  workflow_state.v1 document
+- ``workflows/{workflow_id}``                  workflow_state.v2 document
 - ``workflows/{workflow_id}/audit/{event_id}`` full audit_event.v2 message
 - ``workflows/{workflow_id}/outbox/{event_id}`` {"message": ..., "published": bool}
 - ``workflows/{workflow_id}/inbox/{idempotency_key}`` processed marker
@@ -27,7 +27,7 @@ from google.cloud import firestore
 from jsonschema import Draft202012Validator, FormatChecker
 
 _STATE_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[2] / "contracts" / "state" / "workflow_state.v1.schema.json"
+    Path(__file__).resolve().parents[2] / "contracts" / "state" / "workflow_state.v2.schema.json"
 )
 
 CLOCK_DOC = ("system", "logical_clock")
@@ -84,6 +84,13 @@ def consumed_approval_ref(db: Any, workflow_id: str, approval_id: str) -> Any:
 
 def audit_ref(db: Any, workflow_id: str, event_id: str) -> Any:
     return workflow_ref(db, workflow_id).collection("audit").document(event_id)
+
+
+def completion_evidence_ref(db: Any, workflow_id: str) -> Any:
+    """Single marker doc holding the LATEST roster (completion) verdict
+    consumed pre-resume — deterministic path so the due handler's committing
+    transaction can read it without a query (release-gate race closure)."""
+    return workflow_ref(db, workflow_id).collection("completion").document("evidence")
 
 
 def outbox_ref(db: Any, workflow_id: str, event_id: str) -> Any:

@@ -15,10 +15,10 @@ agents:
     capabilities: [workflow-orchestration]
     lifecycle_status: APPROVED
     contracts:
-      consumes: [nmc_event.v2, maintenance_action_plan.v2, sourcing_report.v3, roster_assignment.v2, validation_verdict.v2, quarantine_verdict.v3, approval_decision.v2, agent_failure_event.v2, due_event.v2]
+      consumes: [nmc_event.v2, maintenance_action_plan.v2, sourcing_report.v3, validation_verdict.v2, approval_decision.v2, agent_failure_event.v2, due_event.v2]
       produces: [work_package_assignment.v2, approval_request.v2, audit_event.v2]
     service_identity: forge-orchestrator@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: null
+    endpoint: https://forge-orchestrator-3vnecimj5a-uc.a.run.app
     permitted_tools: [firestore-workflow-state, pubsub-publish, logical-clock]
   - agent_id: forge-maintenance
     version: 0.1.0
@@ -29,7 +29,7 @@ agents:
       consumes: [work_package_assignment.v2]
       produces: [maintenance_action_plan.v2, audit_event.v2]
     service_identity: forge-maintenance@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: null
+    endpoint: https://forge-maintenance-3vnecimj5a-uc.a.run.app
     permitted_tools: [procedures-library-read, pubsub-publish]
   - agent_id: forge-supply
     version: 0.1.0
@@ -40,7 +40,7 @@ agents:
       consumes: [work_package_assignment.v2]
       produces: [sourcing_report.v3, audit_event.v2]
     service_identity: forge-supply@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: null
+    endpoint: https://forge-supply-3vnecimj5a-uc.a.run.app
     permitted_tools: [approved-parts-registry-read, pubsub-publish]
   - agent_id: forge-workforce
     version: 0.1.0
@@ -51,7 +51,7 @@ agents:
       consumes: [work_package_assignment.v2]
       produces: [roster_assignment.v2, audit_event.v2]
     service_identity: forge-workforce@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: null
+    endpoint: https://forge-workforce-3vnecimj5a-uc.a.run.app
     permitted_tools: [qualification-records-read, pubsub-publish]
   - agent_id: forge-safety
     version: 0.1.0
@@ -62,7 +62,7 @@ agents:
       consumes: [maintenance_action_plan.v2, quarantine_verdict.v3, roster_assignment.v2, sourcing_report.v3]
       produces: [validation_verdict.v2, audit_event.v2]
     service_identity: forge-safety@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: null
+    endpoint: https://forge-safety-3vnecimj5a-uc.a.run.app
     permitted_tools: [procedures-library-read, approved-parts-registry-read, pubsub-publish]
   - agent_id: forge-cyber-trust
     version: 0.1.0

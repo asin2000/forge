@@ -15,4 +15,5 @@ COPY agents ./agents
 COPY infra/residency.yaml ./infra/residency.yaml
 RUN pip install --no-cache-dir -e . --no-deps
 ENV PORT=8080
-CMD ["sh", "-c", "uvicorn services.dashboard.app:production_app --factory --host 0.0.0.0 --port ${PORT}"]
+# one image, two entrypoints: WORKER_ROLE set -> agent worker; unset -> dashboard
+CMD ["sh", "-c", "if [ -n \"${WORKER_ROLE:-}\" ]; then exec uvicorn services.worker:production_app --factory --host 0.0.0.0 --port ${PORT}; else exec uvicorn services.dashboard.app:production_app --factory --host 0.0.0.0 --port ${PORT}; fi"]

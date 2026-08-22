@@ -26,7 +26,15 @@ gcloud services enable \
   iamcredentials.googleapis.com \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
+  cloudscheduler.googleapis.com \
+  compute.googleapis.com \
   storage.googleapis.com
+
+echo "== Provisioning the Pub/Sub service agent (dead-letter forwarding identity)"
+# On a brand-new project the agent may not exist yet; provision it
+# deterministically so the DLQ IAM grants in deploy.sh never race it.
+gcloud beta services identity create --service=pubsub.googleapis.com \
+  --project "${PROJECT_ID}" || true
 
 echo "== Firestore database (native mode) in ${REGION}"
 gcloud firestore databases create --location="${REGION}" --type=firestore-native \

@@ -9,46 +9,51 @@
 # status vocabulary:
 #   planned      - no code yet
 #   implemented  - code merged and emulator-verified; NOT deployed as a
-#                  service (agents run via handlers under the bus; their
-#                  Cloud Run worker deployment is Lane 2, Day 7)
+#                  service (cyber_trust: SEC-4 storage-driven ingestion,
+#                  no bus consumption — Cloud Run exposure is a Day-8 call)
 #   deployed     - live on Cloud Run; endpoint is the deployment record
 version: 1
 region: us-central1            # single pinned region (PLT-1)
 model: gemini-3.5-flash        # all Orchestrator/specialist reasoning (PLT-1)
 services:
   orchestrator:
-    status: implemented
+    status: deployed
     cloud_run_service: forge-orchestrator
     service_account: forge-orchestrator
-    source: [services/orchestrator/]
+    endpoint: https://forge-orchestrator-3vnecimj5a-uc.a.run.app
+    source: [services/orchestrator/, services/worker.py]
     diagram_node: orchestrator
     requirements: [ORC-1, ORC-2, ORC-3, ORC-4, ORC-5, HUM-2]
   maintenance:
-    status: implemented
+    status: deployed
     cloud_run_service: forge-maintenance
     service_account: forge-maintenance
-    source: [services/maintenance/]
+    endpoint: https://forge-maintenance-3vnecimj5a-uc.a.run.app
+    source: [services/maintenance/, services/worker.py]
     diagram_node: maintenance
     requirements: [AGT-1]
   supply:
-    status: implemented
+    status: deployed
     cloud_run_service: forge-supply
     service_account: forge-supply
-    source: [services/supply/]
+    endpoint: https://forge-supply-3vnecimj5a-uc.a.run.app
+    source: [services/supply/, services/worker.py]
     diagram_node: supply
     requirements: [AGT-2]
   workforce:
-    status: implemented
+    status: deployed
     cloud_run_service: forge-workforce
     service_account: forge-workforce
-    source: [services/workforce/]
+    endpoint: https://forge-workforce-3vnecimj5a-uc.a.run.app
+    source: [services/workforce/, services/worker.py]
     diagram_node: workforce
     requirements: [AGT-3]
   safety:
-    status: implemented
+    status: deployed
     cloud_run_service: forge-safety
     service_account: forge-safety
-    source: [services/safety/]
+    endpoint: https://forge-safety-3vnecimj5a-uc.a.run.app
+    source: [services/safety/, services/worker.py]
     diagram_node: safety
     requirements: [AGT-4]
   cyber_trust:
@@ -62,7 +67,7 @@ services:
     status: deployed
     cloud_run_service: forge-dashboard
     service_account: forge-dashboard
-    endpoint: https://forge-dashboard-720097217888.us-central1.run.app
+    endpoint: https://forge-dashboard-3vnecimj5a-uc.a.run.app
     source: [services/dashboard/]
     diagram_node: dashboard
     requirements: [HUM-1, HUM-2, REG-4, AUD-2]
