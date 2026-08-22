@@ -593,3 +593,23 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   fresh-project run). Silent-swallow of a replan racing its veto is now
   AUDITED (PLAN_REVISION_HELD); automating replans requires an in-band
   re-trigger first.
+
+## 2026-08-22 (freeze acceptance) — 10x run caught an ungrounded-parts stall
+
+The first 10-consecutive live acceptance run failed at run 9 (8/10 had
+passed): the live gemini planner produced part numbers not approved for
+DSC-0042 (ACTUATOR-HYD-GX12, HYD-FLUID-H15); Safety CORRECTLY vetoed
+(SP-PART-001), the workflow returned to PLANNING, and — with no automated
+replan producer — the spine stalled. Root cause: Maintenance was grounded
+in the staffable-task catalog (Day-7 fix) but NOT in the approved-parts
+registry, unlike Supply. Fix (same pattern, now complete): the maintenance
+prompt (v3) carries the approved parts for THIS discrepancy, and the
+payload_check runs plan_violations at source so a straying model retries
+(AGT-7) against the approved list instead of shipping a plan doomed to a
+downstream veto. The veto path itself remains correct and tested — this
+just stops the happy path from depending on the model guessing an approved
+part. **Third instance of the invariant: every fact a model asserts —
+parts, qualifications, task codes — must be checked against a registry, and
+the registry belongs IN THE PROMPT, not just in the downstream validator.**
+The acceptance run did exactly its job: 8 lucky runs hid a reliability gap
+that the 9th exposed. Candidate advances; the 10x restarts from zero.
