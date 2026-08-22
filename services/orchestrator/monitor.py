@@ -17,7 +17,7 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
-from forge_common import layout
+from forge_common import layout, registry
 from forge_common.audit import now_iso
 from forge_common.contracts import validate_message
 from forge_common.messages import (
@@ -126,3 +126,60 @@ def run_monitoring_cycle(
             if layout.run_in_transaction(db, _enqueue):
                 flagged.append(wp["work_package_id"])
     return flagged
+
+
+def probe_fleet_health(db: Any, *, prober: Any = None) -> dict[str, int]:
+    """REG-1 health probe: the Orchestrator authenticates to each registered
+    service's /healthz on the monitoring cycle and stamps
+    ``last_heartbeat_at`` on that definition's instances when the probe
+    succeeds. Health stays DERIVED (the dashboard computes staleness): a
+    service that stops answering decays to STALE without anyone writing a
+    health flag, and a definition with no endpoint (or never probed) stays
+    UNKNOWN — never a fabricated HEALTHY.
+
+    ``prober(endpoint) -> bool`` is injectable for tests; the default sends
+    an OIDC-authenticated GET to {endpoint}/healthz (Cloud Run IAM), the
+    'authenticated Orchestrator health probe' REG-1 names.
+    """
+    if prober is None:
+        prober = _oidc_probe
+    stamped = 0
+    probed = 0
+    for snapshot in db.collection("agent_registry").stream():
+        definition = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+        endpoint = (definition or {}).get("endpoint")
+        if not endpoint or not str(endpoint).startswith("https://"):
+            continue
+        probed += 1
+        try:
+            healthy = bool(prober(str(endpoint)))
+        except Exception:
+            healthy = False  # decay to STALE is the honest signal
+        if not healthy:
+            continue
+        beat = now_iso()
+        for inst_snapshot in db.collection("agent_instances").stream():
+            instance = (
+                inst_snapshot.to_dict() if hasattr(inst_snapshot, "to_dict") else inst_snapshot
+            )
+            if instance.get("definition_id") == definition["agent_id"]:
+                registry.instance_ref(db, instance["instance_id"]).set(
+                    {"last_heartbeat_at": beat}, merge=True
+                )
+                stamped += 1
+    return {"probed": probed, "stamped": stamped}
+
+
+def _oidc_probe(endpoint: str) -> bool:  # pragma: no cover - live network path
+    import urllib.request
+
+    import google.auth.transport.requests
+    import google.oauth2.id_token
+
+    token = google.oauth2.id_token.fetch_id_token(
+        google.auth.transport.requests.Request(), endpoint
+    )
+    request = urllib.request.Request(f"{endpoint}/healthz")
+    request.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.status == 200

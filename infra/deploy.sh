@@ -191,6 +191,10 @@ for role in "${AGENT_ROLES[@]}"; do
   gcloud run services add-iam-policy-binding "forge-${role}" --region "$REGION" --project "$PROJECT_ID" --quiet >/dev/null \
     --member "serviceAccount:forge-${role}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role roles/run.invoker
+  # REG-1: the Orchestrator performs the authenticated fleet health probe
+  gcloud run services add-iam-policy-binding "forge-${role}" --region "$REGION" --project "$PROJECT_ID" --quiet >/dev/null \
+    --member "serviceAccount:forge-orchestrator@${PROJECT_ID}.iam.gserviceaccount.com" \
+    --role roles/run.invoker
   PROJECT_ID="$PROJECT_ID" ROLE="$role" URL="$URL" FILTER="$(filter_for "$role")" "$PYTHON" - << 'PYEOF'
 import os, sys
 sys.path.insert(0, "src")
@@ -206,6 +210,11 @@ ensure_push_subscription(
 print(f"   forge-bus-{role} -> {os.environ['URL']}")
 PYEOF
 done
+
+# REG-1 probe access to cyber-trust (deployed service, no push subscription)
+gcloud run services add-iam-policy-binding "forge-cyber-trust" --region "$REGION" --project "$PROJECT_ID" --quiet >/dev/null \
+  --member "serviceAccount:forge-orchestrator@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role roles/run.invoker
 
 echo "== retiring the Day-6 legacy pull subscription (workers use push)"
 gcloud pubsub subscriptions delete forge-bus-sub --project "$PROJECT_ID" --quiet >/dev/null 2>&1 || true

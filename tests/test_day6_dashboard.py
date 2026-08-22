@@ -248,10 +248,11 @@ def test_iap_default_verifier_fails_closed_without_audience(monkeypatch):
 
 
 def test_health_derived_from_heartbeat_staleness():
+    # REG-1: window = 3x the DEPLOYED probe cadence (per-minute tick)
     now = "2026-08-21T12:00:00Z"
     assert derive_health(None, now=now) == "UNKNOWN"
-    assert derive_health("2026-08-21T11:59:50Z", now=now) == "HEALTHY"
-    assert derive_health("2026-08-21T11:58:00Z", now=now) == "STALE"
+    assert derive_health("2026-08-21T11:58:00Z", now=now) == "HEALTHY"
+    assert derive_health("2026-08-21T11:56:00Z", now=now) == "STALE"
 
 
 # ---------- verdict handler: gate entry composes the HUM-2 record ----------
