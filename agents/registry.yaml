@@ -73,5 +73,5 @@ agents:
       consumes: []          # reads quarantine storage only; no bus consumption (SEC-4)
       produces: [quarantine_verdict.v3, audit_event.v2]
     service_identity: forge-cyber-trust@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: null
+    endpoint: https://forge-cyber-trust-3vnecimj5a-uc.a.run.app
     permitted_tools: [quarantine-storage-read, model-armor-screen, pubsub-publish]

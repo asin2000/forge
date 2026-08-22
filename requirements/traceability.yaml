@@ -98,6 +98,7 @@ requirements:
     implemented_by:
       - services/cyber_trust/handlers.py
     verified_by:
+      - scripts/iam_matrix_live.py
       - tests/test_day5_quarantine.py
       - docs/verification/2026-08-21-day6-live.md
     verification_method: test
@@ -106,6 +107,7 @@ requirements:
       - infra/deploy.sh
       - agents/registry.yaml
     verified_by:
+      - scripts/iam_matrix_live.py
       - docs/verification/2026-08-21-day6-live.md
       - docs/verification/2026-08-21-day7-live.md
     verification_method: test
@@ -122,6 +124,7 @@ requirements:
       - src/forge_common/quarantine.py
       - services/cyber_trust/handlers.py
     verified_by:
+      - scripts/demo_scene1_live.py
       - scripts/smoke_quarantine_live.py
       - tests/test_day5_quarantine.py
       - tests/emulator/test_emulator_integration.py
@@ -147,6 +150,7 @@ requirements:
       - services/cyber_trust/handlers.py
       - src/forge_common/quarantine.py
     verified_by:
+      - scripts/demo_scene1_live.py
       - tests/test_contracts.py
       - tests/test_day5_quarantine.py
       - tests/emulator/test_emulator_integration.py
@@ -329,6 +333,7 @@ requirements:
       - scripts/demo_spine_live.py
       - pending
     verified_by:
+      - scripts/demo_scene1_live.py
       - docs/verification/2026-08-21-day7-live.md
     verification_method: document
   CI-7:

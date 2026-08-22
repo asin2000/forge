@@ -83,10 +83,18 @@ def build_handlers(db: Any, role: str, model: Any) -> dict[str, Any]:
 
 
 def create_worker(
-    db: Any, role: str, *, model: Any = DEFAULT_MODEL, publish: Any = None
+    db: Any,
+    role: str,
+    *,
+    model: Any = DEFAULT_MODEL,
+    publish: Any = None,
+    quarantine_store: Any = None,
+    armor: Any = None,
 ) -> FastAPI:
     """The push-delivery surface for one role. ``publish(message, key)`` is
-    the bus transport for draining (injected in tests)."""
+    the bus transport for draining (injected in tests). The cyber_trust role
+    additionally serves POST /ingest (SEC-1 storage-driven intake) when a
+    quarantine store and screen are provided."""
     handlers = build_handlers(db, role, model)
     consumer_identity = f"forge-{role.replace('_', '-')}"
     app = FastAPI(title=f"FORGE worker {role}", docs_url=None, redoc_url=None)
@@ -94,6 +102,70 @@ def create_worker(
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"role": role, "status": "serving"}
+
+    if role == "cyber_trust" and quarantine_store is not None:
+
+        @app.post("/ingest")
+        def ingest(body: dict[str, Any]) -> dict[str, Any]:
+            """SEC-1 intake, behind the platform gate (--no-allow-
+            unauthenticated): quarantine FIRST (GCS object + metadata +
+            audit in one committed step), then the full screening pipeline
+            (bounded parse -> Model Armor -> tool-less classifier), then the
+            non-executable quarantine_verdict.v3 drains to the bus for
+            Safety. The response carries METADATA ONLY — never document
+            text, never verdict content (SEC-4)."""
+            from fastapi import HTTPException
+
+            from forge_common.messages import deterministic_trace_id
+            from forge_common.quarantine import QuarantineConflict
+            from services.cyber_trust.handlers import (
+                ScreeningError,
+                ingest_document,
+                screen_document,
+            )
+
+            for field in ("workflow_id", "doc_id", "source", "raw_text"):
+                if not body.get(field):
+                    raise HTTPException(400, f"missing {field}")
+            workflow_id = body["workflow_id"]
+            wf_snapshot = db.collection("workflows").document(workflow_id).get()
+            wf_doc = (
+                wf_snapshot.to_dict() if hasattr(wf_snapshot, "to_dict") else wf_snapshot
+            ) or {}
+            trace_id = wf_doc.get("trace_id") or deterministic_trace_id(workflow_id)
+            try:
+                ingest_document(
+                    db,
+                    quarantine_store,
+                    workflow_id=workflow_id,
+                    doc_id=body["doc_id"],
+                    raw_text=body["raw_text"],
+                    source=body["source"][:200],
+                    trace_id=trace_id,
+                )
+            except QuarantineConflict as exc:
+                raise HTTPException(
+                    409, "document conflicts with an existing quarantined record (audited)"
+                ) from exc
+            try:
+                verdict = screen_document(
+                    db,
+                    quarantine_store,
+                    body["doc_id"],
+                    armor=armor,
+                    classifier_model=model,
+                    classifier_model_id=str(model) if isinstance(model, str) else "stub-model",
+                    trace_id=trace_id,
+                )
+            except ScreeningError as exc:
+                raise HTTPException(500, type(exc).__name__) from exc
+            if publish is not None:
+                drain_outbox(db, workflow_id, publish)
+            return {
+                "doc_id": body["doc_id"],
+                "workflow_id": workflow_id,
+                "verdict_published": verdict is not None,
+            }
 
     if role == "orchestrator":
 
@@ -176,9 +248,19 @@ def production_app() -> FastAPI:  # pragma: no cover - Cloud Run entrypoint
     otel.init_tracing(f"forge-{role.replace('_', '-')}")
     db = firestore.Client(project=project)
     publisher = OrderedPublisher(project)
+    quarantine_store = None
+    armor = None
+    if role == "cyber_trust":
+        from forge_common.quarantine import GcsQuarantineStore
+        from services.cyber_trust.model_armor import ModelArmorScreen
+
+        quarantine_store = GcsQuarantineStore(db, bucket=f"forge-quarantine-{project}")
+        armor = ModelArmorScreen(project_id=project)
     return create_worker(
         db,
         role,
         model=os.environ.get("FORGE_MODEL", DEFAULT_MODEL),
         publish=lambda message, key: publisher.publish(topic, message, key),
+        quarantine_store=quarantine_store,
+        armor=armor,
     )

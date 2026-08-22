@@ -311,3 +311,86 @@ def test_tick_runs_monitor_clock_and_sweeps_undrained_outboxes():
     assert any(m["envelope"]["event_id"] == orphan["envelope"]["event_id"] for m in published)
     record = layout.outbox_ref(db, WF, orphan["envelope"]["event_id"]).get().to_dict()
     assert record["published"] is True
+
+
+def test_cyber_trust_ingest_surface_quarantines_screens_and_drains():
+    """The deployed SEC-1 intake: quarantine-first ingest, full screening,
+    verdict drained to the bus. The response carries METADATA ONLY — no
+    document text, no verdict content (SEC-4)."""
+    from forge_common.quarantine import FirestoreQuarantineStore
+
+    db = FakeFirestore()
+    registry.load_registry(db)
+    layout.clock_ref(db).set({"logical_time": 0})
+    state.create_workflow(
+        db, workflow_id=WF, equipment_id="GX12-07", trace_id=TRACE, logical_time=0
+    )
+    from pathlib import Path as _Path
+
+    bulletin = (
+        _Path(__file__).resolve().parents[1] / "data" / "vendor_bulletin_vnd_act_9901.txt"
+    ).read_text()
+    classification = {
+        "label": "malicious",
+        "confidence": 0.97,
+        "candidate_part_identifier": "VND-ACT-9901",
+        "rationale": "Embedded override instructions targeting automated systems.",
+    }
+    published = []
+    client = TestClient(
+        create_worker(
+            db,
+            "cyber_trust",
+            model=stub_json(classification),
+            publish=lambda m, k: published.append(m),
+            quarantine_store=FirestoreQuarantineStore(db, bucket="forge-quarantine-test"),
+            armor=lambda text: {"verdict": "flagged", "categories": ["pi_and_jailbreak"]},
+        ),
+        raise_server_exceptions=False,
+    )
+    response = client.post(
+        "/ingest",
+        json={
+            "workflow_id": WF,
+            "doc_id": "doc-vendor-bulletin-001",
+            "source": "synthetic-vendor-portal",
+            "raw_text": bulletin,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verdict_published"] is True
+    assert "SYSTEM OVERRIDE" not in response.text and "VND-ACT-9901" not in response.text
+    verdicts = [m for m in published if m["envelope"]["schema_version"] == "quarantine_verdict.v3"]
+    assert len(verdicts) == 1
+    assert verdicts[0]["envelope"]["trace_id"] == TRACE  # the WORKFLOW root trace
+    reasons = [
+        s.to_dict()["payload"]["reason_code"]
+        for s in layout.workflow_ref(db, WF).collection("audit").stream()
+    ]
+    assert "DOCUMENT_QUARANTINED" in reasons
+
+    # identical re-ingest: idempotent 200; conflicting bytes: 409 audited
+    assert (
+        client.post(
+            "/ingest",
+            json={
+                "workflow_id": WF,
+                "doc_id": "doc-vendor-bulletin-001",
+                "source": "synthetic-vendor-portal",
+                "raw_text": bulletin,
+            },
+        ).status_code
+        == 200
+    )
+    conflict = client.post(
+        "/ingest",
+        json={
+            "workflow_id": WF,
+            "doc_id": "doc-vendor-bulletin-001",
+            "source": "synthetic-vendor-portal",
+            "raw_text": bulletin + " TAMPERED",
+        },
+    )
+    assert conflict.status_code == 409
+    assert client.post("/ingest", json={"workflow_id": WF}).status_code == 400

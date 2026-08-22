@@ -157,8 +157,10 @@ gcloud artifacts repositories describe forge --location "$REGION" --project "$PR
        --location "$REGION" --project "$PROJECT_ID"
 gcloud builds submit --tag "$IMAGE" --project "$PROJECT_ID" --quiet
 
-echo "== agent workers on Cloud Run (--no-allow-unauthenticated; push-only ingress)"
-for role in "${AGENT_ROLES[@]}"; do
+echo "== agent + cyber-trust services on Cloud Run (--no-allow-unauthenticated)"
+# cyber-trust is a SERVICE too: it consumes nothing from the bus (SEC-4) but
+# serves POST /ingest (SEC-1) and publishes quarantine_verdict.v3.
+for role in "${AGENT_ROLES[@]}" cyber-trust; do
   role_env="${role//-/_}"
   gcloud run deploy "forge-${role}" \
     --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE" \

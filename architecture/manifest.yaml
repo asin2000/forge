@@ -8,9 +8,8 @@
 #
 # status vocabulary:
 #   planned      - no code yet
-#   implemented  - code merged and emulator-verified; NOT deployed as a
-#                  service (cyber_trust: SEC-4 storage-driven ingestion,
-#                  no bus consumption — Cloud Run exposure is a Day-8 call)
+#   implemented  - code merged and emulator-verified; not deployed
+#                  as a Cloud Run service
 #   deployed     - live on Cloud Run; endpoint is the deployment record
 version: 1
 region: us-central1            # single pinned region (PLT-1)
@@ -57,10 +56,11 @@ services:
     diagram_node: safety
     requirements: [AGT-4]
   cyber_trust:
-    status: implemented
+    status: deployed
     cloud_run_service: forge-cyber-trust
     service_account: forge-cyber-trust
-    source: [services/cyber_trust/]
+    endpoint: https://forge-cyber-trust-3vnecimj5a-uc.a.run.app
+    source: [services/cyber_trust/, services/worker.py]
     diagram_node: cyber_trust
     requirements: [AGT-5, SEC-1, SEC-2, SEC-3, SEC-4]
   dashboard:
