@@ -86,14 +86,43 @@ def _cleanup() -> None:
 atexit.register(_cleanup)
 
 
+_TOKEN_CACHE: dict[str, float | str] = {}
+
+
 def token() -> str:
-    return subprocess.run(
-        ["gcloud", "auth", "print-identity-token"], capture_output=True, text=True, check=True
-    ).stdout.strip()
+    # Identity tokens last ~1h; mint once and reuse. Minting fresh on every
+    # HTTP call spawned a gcloud subprocess per request, and one crashed with
+    # SIGTRAP mid-run (a gcloud flake, not a FORGE fault). Cache + retry.
+    now = time.time()
+    if _TOKEN_CACHE and now - float(_TOKEN_CACHE["at"]) < 1800:
+        return str(_TOKEN_CACHE["value"])
+    last = ""
+    for attempt in range(3):
+        proc = subprocess.run(
+            ["gcloud", "auth", "print-identity-token"], capture_output=True, text=True
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            _TOKEN_CACHE["value"] = proc.stdout.strip()
+            _TOKEN_CACHE["at"] = now
+            return proc.stdout.strip()
+        last = (proc.stderr or "").strip().splitlines()[-1:] and (proc.stderr or "").strip()
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"gcloud token minting failed after 3 attempts: {last}")
+
+
+def _gcloud(args: list[str]) -> str:
+    """Run a read-only gcloud command, retrying transient crashes (a bare
+    print-identity-token / describe occasionally dies with SIGTRAP)."""
+    for attempt in range(3):
+        proc = subprocess.run(args, capture_output=True, text=True)
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"gcloud failed after 3 attempts: {' '.join(args[:3])}")
 
 
 def dashboard_url() -> str:
-    return subprocess.run(
+    return _gcloud(
         [
             "gcloud",
             "run",
@@ -106,11 +135,8 @@ def dashboard_url() -> str:
             PROJECT,
             "--format",
             "value(status.url)",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+        ]
+    )
 
 
 def http(method: str, url: str, body: dict | None = None) -> dict:

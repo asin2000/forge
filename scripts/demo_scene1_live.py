@@ -67,31 +67,50 @@ def _cleanup() -> None:
 atexit.register(_cleanup)
 
 
+_TOKEN_CACHE: dict[str, float | str] = {}
+
+
 def token() -> str:
-    return subprocess.run(
-        ["gcloud", "auth", "print-identity-token"], capture_output=True, text=True, check=True
-    ).stdout.strip()
+    # cache + retry: minting an identity token per HTTP call spawns a gcloud
+    # subprocess each time, and one crashed with SIGTRAP mid-run (a gcloud
+    # flake). Tokens last ~1h, so mint once and reuse.
+    now = time.time()
+    if _TOKEN_CACHE and now - float(_TOKEN_CACHE["at"]) < 1800:
+        return str(_TOKEN_CACHE["value"])
+    for attempt in range(3):
+        proc = subprocess.run(
+            ["gcloud", "auth", "print-identity-token"], capture_output=True, text=True
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            _TOKEN_CACHE.update({"value": proc.stdout.strip(), "at": now})
+            return proc.stdout.strip()
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError("gcloud token minting failed after 3 attempts")
 
 
 def service_url(name: str) -> str:
-    return subprocess.run(
-        [
-            "gcloud",
-            "run",
-            "services",
-            "describe",
-            name,
-            "--region",
-            "us-central1",
-            "--project",
-            PROJECT,
-            "--format",
-            "value(status.url)",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    for attempt in range(3):
+        proc = subprocess.run(
+            [
+                "gcloud",
+                "run",
+                "services",
+                "describe",
+                name,
+                "--region",
+                "us-central1",
+                "--project",
+                PROJECT,
+                "--format",
+                "value(status.url)",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"gcloud describe {name} failed after 3 attempts")
 
 
 def post(url: str, body: dict) -> tuple[int, str]:
