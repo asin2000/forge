@@ -3,10 +3,15 @@
 Multi-agent system coordinating recovery of non-mission-capable (NMC) support
 equipment for a **fictional** installation operating twelve GX-12 Ground
 Support Vehicles. Entry for the All Things Agentic Hackathon, **Fortified
-Enterprise Fleet** track, by Anansi Labs.
+Enterprise Fleet** track.
 
-**Governing baseline:** `FORGE-REQUIREMENTS.md` v1.1.2 (repo root). If code
-and that document disagree, the document wins. Schedule:
+**Entry basis:** solo individual entry by Dr. Armond E. Sinclair. "Anansi
+Labs" appears only as the entrant's professional affiliation; this is not a
+company or team entry, no Anansi Labs materials are included (see
+`PREEXISTING_WORK.md`), and any prize is payable to the entrant personally.
+
+**Governing baseline:** `FORGE-REQUIREMENTS.md` v1.2 (repo root, ratified
+2026-08-21). If code and that document disagree, the document wins. Schedule:
 `FORGE-BUILD-PLAN.md` (repo root). AI-assisted sessions bootstrap from
 `CLAUDE.md` (DFT-2). Every module traces to a requirement ID via
 `requirements/traceability.yaml` (DFT-1).
@@ -33,17 +38,28 @@ verdict plus tightly-typed safe metadata ever reaches the bus. Reasoning:
 `gemini-3.5-flash` on Vertex AI at the DAT-1 map's `us` multi-region
 (everything else pins `us-central1`; see Data residency below).
 
+**Security result (defense in depth), observed live.** In the demonstration
+scene a poisoned vendor bulletin carries a *diluted* prompt injection.
+**Model Armor returned `clean`** on the full bulletin — the dilution evades
+the inline filter — but the **second layer, a tool-less Cyber Trust
+classifier, caught it** (`malicious`, candidate `VND-ACT-9901`), Safety then
+vetoed on the trusted registry (`SP-SEC-004`, `SP-PART-001`), and the raw
+document never left quarantine. Neither layer alone is sufficient; the two in
+series are. This is the headline finding and is reproduced in
+`scripts/demo_scene1_live.py` against the deployed Cyber Trust service.
+
 ## Repository layout
 
     contracts/        versioned message schemas + examples (ICD-1..4)
-    src/forge_common/ shared contract validation (ICD-2)
-    services/         one directory per agent role (Cloud Run services)
+    src/forge_common/ shared bus, state, audit, clock, OTel, contracts (ICD-2, OBS)
+    services/         agent roles + dashboard; worker.py = Cloud Run push runtime
     prompts/          versioned prompt files (PLT-1)
-    requirements/     traceability.yaml (DFT-1)
+    requirements/     traceability.yaml (DFT-1, strict)
     architecture/     manifest.yaml — service → module → diagram node (DFT-5)
-    scripts/          CI gates and smoke tests
-    infra/            GCP bootstrap (setup-gcp.sh)
-    tests/            unit + contract tests (CI-3 seed)
+    scripts/          CI gates, live smokes, acceptance + dress-rehearsal harness
+    infra/            setup-gcp.sh + deploy.sh (one-command PLT-6) + Dockerfile
+    docs/verification/ verbatim live-run evidence (Days 5-8)
+    tests/            unit + contract + real-emulator integration (CI-3/CI-4)
 
 ## Spin-up
 
@@ -58,9 +74,9 @@ Local (no cloud needed for Lane-1 gates):
 Full environment stand-up is ONE command (PLT-6) — it chains the API/
 Firestore bootstrap, per-role service accounts and scoped IAM, the bus with
 its dead-letter queue, the regional log bucket, the registry load, one
-container build, five agent workers plus the dashboard on Cloud Run
-(`--no-allow-unauthenticated`), filtered push subscriptions, and the
-per-minute heartbeat:
+container build, six agent services (five reasoning agents + Cyber Trust)
+plus the dashboard on Cloud Run (`--no-allow-unauthenticated`), filtered
+push subscriptions, and the per-minute heartbeat:
 
     PROJECT_ID=<id> PYTHON=./.venv/bin/python bash infra/deploy.sh
 
@@ -95,6 +111,35 @@ bucket predates configuration (created with the project, location fixed)
 and holds only Google admin-activity audit entries, never operational
 payload data. FORGE claims no Assured Workloads or IL4 compliance. All
 data is synthetic (SUB-5).
+
+## Acceptance & evidence
+
+Frozen at tag **`v1.2-demo`** (DFT-4). CI enforces eight gates on every PR
+(lint, contracts+ICD-3, unit, real-emulator integration, secrets, dead-code,
+config/registry+residency, traceability); the suite is **221 tests (201 unit
++ 20 real-client emulator)** and traceability runs in strict mode.
+
+Live acceptance on the frozen commit, verbatim captures in
+`docs/verification/`:
+
+- **CI-8 — 10/10 consecutive** live spines, NMC → RELEASED, real
+  `gemini-3.5-flash` reasoning with two human-gated approvals each
+  (`scripts/acceptance_run.sh`; record in
+  `docs/verification/2026-08-22-acceptance.md`).
+- **Dress rehearsal** (Scene 1 veto + full spine) in 68 s, under the
+  four-minute budget (same record).
+- **Clean-project deploy**: `deploy.sh` stood up the whole environment on a
+  fresh billed project (then deleted) — the PLT-6 criterion
+  (`2026-08-21-day7-live.md` §9).
+- **Three security proofs** (`2026-08-21-day7-live.md` §6–§8): the
+  defense-in-depth screening result above; an IAM negative-test matrix where
+  each identity is denied a prohibited operation *by Google IAM*
+  (`scripts/iam_matrix_live.py`, 6/6); and live dead-letter forwarding of a
+  poison message.
+
+Traceability and the service map: `requirements/traceability.yaml` (DFT-1,
+strict) and `architecture/manifest.yaml` (DFT-5). The CI-4 assertion list is
+in `.github/workflows/pr-gate.yml`.
 
 ## Process rules
 
