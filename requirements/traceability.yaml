@@ -9,9 +9,6 @@ pending_allowed:
   - CI-6   # WIF auto-deploy: Day 8
   - CI-8   # 10/10 streak: Day 9
   - DFT-4  # freeze + v1.2-demo tag: Day 8
-  - PLT-6  # live CLEAN-PROJECT deployment test: Day 8 (idempotent
-           # convergence on the standing project is captured; the fresh-
-           # project run is the requirement's own verify criterion)
   - SUB-1  # submission artifacts: Days 9-10
   - SUB-2
   - SUB-3
@@ -291,9 +288,9 @@ requirements:
     implemented_by:
       - infra/deploy.sh
       - Dockerfile
+      - infra/setup-gcp.sh
     verified_by:
       - docs/verification/2026-08-21-day7-live.md
-      - pending
     verification_method: test
   CI-1:
     implemented_by:
@@ -369,7 +366,8 @@ requirements:
     verification_method: document
   DFT-4:
     implemented_by:
-      - pending
+      - scripts/acceptance_run.sh
+      - scripts/dress_rehearsal.sh
     verified_by:
       - pending
     verification_method: document

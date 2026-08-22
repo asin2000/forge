@@ -40,6 +40,25 @@ echo "== Firestore database (native mode) in ${REGION}"
 gcloud firestore databases create --location="${REGION}" --type=firestore-native \
   || echo "   (database may already exist — fine)"
 
+echo "== Model Armor screening template (PLT-4/SEC-1: forge-screening, LOW_AND_ABOVE)"
+# cyber-trust screens against this template at runtime; a genuinely clean
+# project has none, so setup creates it (idempotent — 409 = already exists).
+PROJECT_ID="${PROJECT_ID}" REGION="${REGION}" python3 - << 'PYARMOR' || echo "   (Model Armor template step skipped: $?)"
+import json, os, urllib.error, urllib.request, subprocess
+project, region = os.environ["PROJECT_ID"], os.environ["REGION"]
+tok = subprocess.run(["gcloud","auth","print-access-token"],capture_output=True,text=True).stdout.strip()
+host = f"https://modelarmor.{region}.rep.googleapis.com/v1"
+parent = f"projects/{project}/locations/{region}"
+body = {"filterConfig": {"piAndJailbreakFilterSettings": {"filterEnforcement": "ENABLED", "confidenceLevel": "LOW_AND_ABOVE"}}}
+req = urllib.request.Request(f"{host}/{parent}/templates?templateId=forge-screening",
+    data=json.dumps(body).encode(), method="POST",
+    headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+try:
+    urllib.request.urlopen(req); print("   forge-screening template created")
+except urllib.error.HTTPError as e:
+    print("   forge-screening template exists" if e.code == 409 else f"   template HTTP {e.code}")
+PYARMOR
+
 echo "== Quota sanity: Vertex AI gemini-3.5-flash in ${REGION}"
 echo "   Check quotas in console: IAM & Admin -> Quotas -> Vertex AI API."
 echo "   If request-per-minute quota < 200, file an increase TODAY (approvals take days; risk R5)."
