@@ -1,0 +1,11 @@
+# Cloud Run --source uploads: ship only what the Dockerfile needs.
+.git/
+.venv/
+__pycache__/
+**/__pycache__/
+tests/
+docs/
+scripts/
+.github/
+.pytest_cache/
+*.log

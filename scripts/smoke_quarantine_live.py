@@ -15,6 +15,7 @@ in Lane 2 (CI-6/CI-8):
 Usage: PROJECT_ID=<id> python scripts/smoke_quarantine_live.py
 """
 
+import atexit
 import json
 import os
 import sys
@@ -48,9 +49,28 @@ bulletin = (
 # 1. GCS round-trip with a FRESH doc id: proves generation capture and the
 # generation-pinned read, not just adoption of an old object.
 doc_id = f"smoke-vsb-{uuid.uuid4().hex[:10]}"
-wf_id = "wf-smoke-quarantine-001"
+wf_id = f"wf-smoke-{uuid.uuid4().hex[:10]}"
 db = firestore.Client(project=PROJECT)
 store = GcsQuarantineStore(db, bucket=f"forge-quarantine-{PROJECT}")
+
+
+def _cleanup() -> None:
+    """try/finally-equivalent (atexit): remove ONLY this run's records —
+    the unique wf_id/doc_id mean no other run's audits can be touched —
+    and run even when an assertion fails mid-smoke."""
+    try:
+        db.collection("quarantine").document(doc_id).delete()
+        for snapshot in db.collection("workflows").document(wf_id).collection("audit").stream():
+            snapshot.reference.delete()
+        blob = store._bucket.blob(f"quarantine/{doc_id}")
+        if blob.exists():
+            blob.delete()
+        print("CLEANUP: this run's smoke records removed")
+    except Exception as exc:  # cleanup is best-effort, never masks the smoke
+        print(f"CLEANUP: incomplete ({exc})")
+
+
+atexit.register(_cleanup)
 # The PRODUCTION ingestion path — atomic metadata + DOCUMENT_QUARANTINED
 # audit. No direct metadata writes: the smoke must not create the
 # metadata-without-audit state the production fix prohibits.
@@ -110,9 +130,4 @@ print(
     "the classifier catches the dilution (end-to-end pipeline = Lane 2)"
 )
 
-# Cleanup: the smoke leaves no records behind (metadata, audits, object).
-db.collection("quarantine").document(doc_id).delete()
-for snapshot in db.collection("workflows").document(wf_id).collection("audit").stream():
-    snapshot.reference.delete()
-store._bucket.blob(f"quarantine/{doc_id}").delete()
-print("CLEANUP: smoke records removed")
+# NOTE: cleanup is registered as try/finally around the whole smoke (below).

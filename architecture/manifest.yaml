@@ -1,52 +1,71 @@
-# Service manifest (DFT-5): each deployed service -> source modules -> diagram node.
-# CI checks this manifest against the deploy config (checker lands Day 7 per
-# FORGE-BUILD-PLAN.md). status: planned entries flip to deployed as services land.
+# Service manifest (DFT-5): each service -> source modules -> diagram node.
+# CI-9 (scripts/check_config.py) validates this manifest against the
+# registry, the DAT-1 residency map, and the services/ tree on every PR:
+# statuses must match reality (code on disk may not claim "planned";
+# "deployed" requires a real Cloud Run endpoint in the DAT-1 region),
+# service accounts must be the resolved per-role ids from infra/deploy.sh,
+# and the Cloud Logging location must match the residency map.
+#
+# status vocabulary:
+#   planned      - no code yet
+#   implemented  - code merged and emulator-verified; NOT deployed as a
+#                  service (agents run via handlers under the bus; their
+#                  Cloud Run worker deployment is Lane 2, Day 7)
+#   deployed     - live on Cloud Run; endpoint is the deployment record
 version: 1
 region: us-central1            # single pinned region (PLT-1)
 model: gemini-3.5-flash        # all Orchestrator/specialist reasoning (PLT-1)
 services:
   orchestrator:
-    status: planned
+    status: implemented
     cloud_run_service: forge-orchestrator
-    service_account: forge-orchestrator-sa
+    service_account: forge-orchestrator
     source: [services/orchestrator/]
     diagram_node: orchestrator
-    requirements: [ORC-1, ORC-2, ORC-3, ORC-4, ORC-5]
+    requirements: [ORC-1, ORC-2, ORC-3, ORC-4, ORC-5, HUM-2]
   maintenance:
-    status: planned
+    status: implemented
     cloud_run_service: forge-maintenance
-    service_account: forge-maintenance-sa
+    service_account: forge-maintenance
     source: [services/maintenance/]
     diagram_node: maintenance
     requirements: [AGT-1]
   supply:
-    status: planned
+    status: implemented
     cloud_run_service: forge-supply
-    service_account: forge-supply-sa
+    service_account: forge-supply
     source: [services/supply/]
     diagram_node: supply
     requirements: [AGT-2]
   workforce:
-    status: planned
+    status: implemented
     cloud_run_service: forge-workforce
-    service_account: forge-workforce-sa
+    service_account: forge-workforce
     source: [services/workforce/]
     diagram_node: workforce
     requirements: [AGT-3]
   safety:
-    status: planned
+    status: implemented
     cloud_run_service: forge-safety
-    service_account: forge-safety-sa
+    service_account: forge-safety
     source: [services/safety/]
     diagram_node: safety
     requirements: [AGT-4]
   cyber_trust:
-    status: planned
+    status: implemented
     cloud_run_service: forge-cyber-trust
-    service_account: forge-cyber-trust-sa
+    service_account: forge-cyber-trust
     source: [services/cyber_trust/]
     diagram_node: cyber_trust
     requirements: [AGT-5, SEC-1, SEC-2, SEC-3, SEC-4]
+  dashboard:
+    status: deployed
+    cloud_run_service: forge-dashboard
+    service_account: forge-dashboard
+    endpoint: https://forge-dashboard-720097217888.us-central1.run.app
+    source: [services/dashboard/]
+    diagram_node: dashboard
+    requirements: [HUM-1, HUM-2, REG-4, AUD-2]
 shared:
   contracts: {source: [contracts/], requirements: [ICD-1, ICD-2, ICD-3, ICD-4]}
   forge_common: {source: [src/forge_common/], requirements: [ICD-2]}
@@ -54,3 +73,7 @@ infrastructure:
   firestore: {purpose: "workflow state, inbox/outbox, audit, Logical Clock", requirements: [ORC-5, AUD-2, ICD-5]}
   pubsub: {purpose: "agent bus with per-workflow ordering keys + DLQ", requirements: [ICD-5]}
   model_armor: {purpose: "SEC screening", requirements: [PLT-4, SEC-1]}
+observability:
+  cloud_logging_location: us-central1   # DAT-1 map: cloud_logging
+  # Cloud Trace receives metadata-only telemetry and is the disclosed
+  # residency exception (DAT-3/OBS-2); wiring lands Day 7 (OBS-1/OBS-2).

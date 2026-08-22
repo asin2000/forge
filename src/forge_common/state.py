@@ -57,7 +57,9 @@ class GateBlocked(Exception):
     """HUM-1: gated transition without a valid, unconsumed approved decision."""
 
 
-def record_approval_decision(db: Any, message: dict[str, Any]) -> str:
+def record_approval_decision(
+    db: Any, message: dict[str, Any], *, enqueue_outbox: bool = False
+) -> str:
     """Persist an authoritative approval_decision.v2 record (HUM-1).
 
     Contract-validates the FULL message, then stores it under
@@ -99,6 +101,13 @@ def record_approval_decision(db: Any, message: dict[str, Any]) -> str:
             {"message": message, "recorded_observed_at": now_iso()},
         )
         txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
+        if enqueue_outbox:
+            # The bus copy for downstream consumers rides the SAME
+            # transaction as the authoritative record and its audit.
+            txn.create(
+                layout.outbox_ref(db, workflow_id, message["envelope"]["event_id"]),
+                {"message": message, "published": False, "enqueued_at": now_iso()},
+            )
 
     layout.run_in_transaction(db, _record)
     return payload["approval_id"]
