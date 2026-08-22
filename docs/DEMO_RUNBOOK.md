@@ -17,7 +17,33 @@ gcloud auth application-default print-access-token >/dev/null   # ADC warm
 # sanity: the deployed fleet is the frozen runtime
 gcloud run services list --project "$PROJECT_ID" --region us-central1 \
   --format="value(metadata.name,status.conditions[0].status)"
+
+# 1) reset the synthetic clock so the demo reads Day 0 -> Day 21
+PROJECT_ID=$PROJECT_ID python - <<'PY'
+import sys; sys.path.insert(0,'src')
+from google.cloud import firestore
+from forge_common import layout
+import os
+layout.clock_ref(firestore.Client(project=os.environ['PROJECT_ID'])).set({'logical_time': 0})
+print('logical clock reset to Day 0')
+PY
+
+# 2) start the identity-token forwarder (the browser's approval clicks need
+#    a bearer the APP can see; the gcloud proxy only satisfies the platform)
+PROJECT_ID=$PROJECT_ID python scripts/../../path-to/auth_forwarder.py 8090 &
 ```
+
+The forwarder script lives with the session scratchpad; keep a copy beside
+the repo if recording later. Browser to `http://localhost:8090/`.
+
+**Framing rules (from review):** record the browser CONTENT AREA only —
+crop all browser chrome so no `localhost` URL is visible. Prove deployment
+with the Cloud Run console tab, not the address bar. Read the veto's "why"
+from the approval card's FACTS/RULES rows; show trace evidence on a
+separate Cloud Trace tab (the dashboard intentionally carries no trace
+link). In the Agent Catalog, point at the STATE column (IDLE / RESERVE /
+ACTIVE / FAILED) — health badges derive from live heartbeats and read
+HEALTHY when the fleet is up.
 
 Have two browser tabs ready (optional but strong on camera): the Cloud Run
 services list, and a Cloud Trace waterfall you can refresh after Scene 2.

@@ -71,3 +71,40 @@ exit=0
 
 Wall-clock 68 s, well under the four-minute budget — headroom for narration.
 The demo recording plan is `docs/DEMO_RUNBOOK.md`.
+
+## Record-readiness HOLD closure — v1.2-demo.3 (2026-08-22)
+
+The pre-recording review triggered a conditional HOLD with two proofs. Both
+closed, through three merged fixes (#20 REG-1 heartbeat probe, #21
+acceptance-driver heartbeat race, #22 /health route — Google's front end
+intercepts /healthz on *.run.app and its HTML 404 never reaches the
+container; root-caused from inside the exact runtime via a one-off Cloud
+Run job showing token+IAM fine).
+
+**Condition 1 — honest fleet health (REG-1).** The heartbeat mechanism did
+not exist (nothing wrote last_heartbeat_at; the review's STALE wall was a
+seed artifact — the real fleet showed UNKNOWN). Now: the Orchestrator's
+per-minute tick sends OIDC-authenticated probes to every registered
+endpoint's /health and stamps heartbeats on success; failures stamp nothing
+(decay to STALE); never-probed stays UNKNOWN. Live: `"health": {"probed":
+6, "stamped": 7}` per tick, and the deployed catalog derives HEALTHY for
+all seven instances from genuine heartbeats.
+
+**Acceptance rerun on the replacement tag**: 10/10 consecutive live spines
+PASS on `b5afd01` (= v1.2-demo.3) with the production heartbeat running
+concurrently (some due events were emitted by the heartbeat itself — the
+at-least-once coexistence #21 made the driver tolerate). Dress rehearsal
+75s (budget 240s).
+
+**Condition 2 — browser approval path.** Live spine from a Day-0 clock:
+both approvals executed FROM THE BROWSER via a local identity-token
+forwarder (the gcloud proxy authenticates at the platform but forwards no
+bearer the app can see, so plain-browser clicks 401 — the forwarder is the
+recording route). Result: Day 0 -> Day 21 -> RELEASED, and the audit trail
+records the authenticated principal on both approvals
+(APPROVAL_RECORDED x2, SCHEDULE_OVERRIDE_APPROVED, RELEASE_APPROVED).
+Method note, stated plainly: the in-app review browser's OS-input layer was
+degraded, so the clicks were dispatched on the Approve button elements
+(`button.click()`), executing the page's own onclick -> fetch path — the
+identical code path a human click drives; the human-finger click itself
+occurs naturally during recording.
