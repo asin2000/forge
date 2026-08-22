@@ -7,7 +7,6 @@ version: 1
 strict: true
 pending_allowed:
   - CI-6   # WIF auto-deploy: Day 8
-  - CI-8   # 10/10 streak: Day 9
   - DFT-4  # freeze + v1.2-demo tag: Day 8
   - SUB-1  # submission artifacts: Days 9-10
   - SUB-2
@@ -341,9 +340,9 @@ requirements:
     verification_method: document
   CI-8:
     implemented_by:
-      - pending
+      - scripts/acceptance_run.sh
     verified_by:
-      - pending
+      - docs/verification/2026-08-22-acceptance.md
     verification_method: demonstration
   DFT-1:
     implemented_by:
