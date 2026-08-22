@@ -20,7 +20,6 @@ Surfaces:
 from __future__ import annotations
 
 import datetime
-import uuid
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -55,9 +54,26 @@ def derive_health(last_heartbeat_at: str | None, *, now: str | None = None) -> s
     return "HEALTHY" if age <= STALE_AFTER_SECONDS else "STALE"
 
 
-def create_app(db: Any, *, verifier: Any = None) -> FastAPI:
+def create_app(db: Any, *, verifier: Any = None, iap_verifier: Any = None) -> FastAPI:
     app = FastAPI(title="FORGE dashboard", docs_url=None, redoc_url=None)
-    verify = {"verifier": verifier} if verifier is not None else {}
+    verify: dict[str, Any] = {}
+    if verifier is not None:
+        verify["verifier"] = verifier
+    if iap_verifier is not None:
+        verify["iap_verifier"] = iap_verifier
+
+    def _principal(request: Request) -> str:
+        try:
+            return auth.approver_from_request(request.headers, **verify)
+        except PermissionError as exc:
+            raise HTTPException(401, str(exc)) from exc
+
+    @app.get("/api/whoami")
+    def whoami(request: Request) -> dict[str, str]:
+        """Read-only: the principal THIS surface derives for the caller —
+        lets ops (and the live forged-header negative test) confirm identity
+        never comes from client-suppliable fields."""
+        return {"approver_identity": _principal(request)}
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
@@ -93,9 +109,12 @@ def create_app(db: Any, *, verifier: Any = None) -> FastAPI:
             "pending_approvals": _pending_approvals(workflow_id),
         }
 
-    def _pending_approvals(workflow_id: str) -> list[dict[str, Any]]:
-        """approval_request messages with no recorded decision (HUM-2)."""
-        pending = []
+    def _pending_requests(workflow_id: str) -> dict[str, dict[str, Any]]:
+        """Full approval_request messages with no recorded decision, keyed by
+        approval_id (HUM-2). The ENVELOPE matters too: the decision must ride
+        the request's trace (OBS-1/ICD-4 — one trace per workflow, no second
+        application trace identifier)."""
+        pending: dict[str, dict[str, Any]] = {}
         for record in _docs(layout.workflow_ref(db, workflow_id).collection("outbox")):
             message = record.get("message", {})
             if message.get("envelope", {}).get("schema_version") != "approval_request.v2":
@@ -104,8 +123,11 @@ def create_app(db: Any, *, verifier: Any = None) -> FastAPI:
             snapshot = layout.approval_ref(db, workflow_id, approval_id).get()
             decided = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
             if not decided:
-                pending.append(message["payload"])
+                pending[approval_id] = message
         return pending
+
+    def _pending_approvals(workflow_id: str) -> list[dict[str, Any]]:
+        return [m["payload"] for m in _pending_requests(workflow_id).values()]
 
     @app.get("/api/catalog")
     def catalog() -> list[dict[str, Any]]:
@@ -140,28 +162,28 @@ def create_app(db: Any, *, verifier: Any = None) -> FastAPI:
 
     @app.post("/api/workflows/{workflow_id}/decide")
     def decide(workflow_id: str, request: Request, body: dict[str, Any]) -> dict[str, Any]:
-        try:
-            approver = auth.approver_from_request(request.headers, **verify)
-        except PermissionError as exc:
-            raise HTTPException(401, str(exc)) from exc
+        approver = _principal(request)
         if "approver_identity" in body:
             # HUM-1: identity comes from the authenticated principal ONLY.
             raise HTTPException(400, "approver_identity is not client-suppliable")
         approval_id = body.get("approval_id")
-        pending = {p["approval_id"]: p for p in _pending_approvals(workflow_id)}
+        pending = _pending_requests(workflow_id)
         if approval_id not in pending:
             raise HTTPException(404, "no such pending approval request")
         decision = body.get("decision")
         if decision not in ("approved", "rejected"):
             raise HTTPException(400, "decision must be approved or rejected")
-        request_payload = pending[approval_id]
+        request_message = pending[approval_id]
+        request_payload = request_message["payload"]
         event_id = deterministic_event_id("decision", workflow_id, approval_id, decision, approver)
         message = {
             "envelope": build_envelope(
                 workflow_id=workflow_id,
                 schema_version="approval_decision.v2",
                 event_id=event_id,
-                trace_id=uuid.uuid5(uuid.NAMESPACE_DNS, workflow_id).hex,
+                # OBS-1/ICD-4: the decision CONTINUES the workflow trace the
+                # request rode in on — never a new application trace id.
+                trace_id=request_message["envelope"]["trace_id"],
                 idempotency_key=f"idem-{approval_id}-{decision}",
             ),
             "payload": {

@@ -357,8 +357,8 @@ requirements:
     implemented_by:
       - architecture/manifest.yaml
     verified_by:
-      - pending
-    verification_method: document
+      - scripts/check_config.py
+    verification_method: test
   SUB-1:
     implemented_by:
       - pending

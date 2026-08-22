@@ -26,7 +26,16 @@ from forge_common.messages import build_envelope, deterministic_event_id
 
 WF = "wf-day6-001"
 TRACE = "c0ffee00c0ffee00c0ffee00c0ffee00"
-IAP = {auth.IAP_HEADER: "accounts.google.com:approver@example.com"}
+APPROVER = "approver@example.com"
+AUTHED = {"authorization": "Bearer test-token"}
+FORGED_PLAIN = {auth.IAP_PLAIN_HEADER: "accounts.google.com:attacker@evil.example"}
+
+
+def make_client(db):
+    """Surface in mode 'verify' with an injected verifier: AUTHED headers
+    resolve to APPROVER; identity NEVER comes from client-suppliable
+    fields."""
+    return TestClient(create_app(db, verifier=lambda token: APPROVER))
 
 
 def ready_db(*, status="VALIDATING"):
@@ -130,8 +139,20 @@ def audit_reasons(db):
 # ---------- auth: approver identity from the principal ONLY (HUM-1) ----------
 
 
-def test_auth_iap_header_yields_principal():
-    assert auth.approver_from_request(dict(IAP)) == "approver@example.com"
+def _stripped_token(claims):
+    import base64
+    import json
+
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"header.{payload}"
+
+
+_GOOD_CLAIMS = {
+    "iss": "https://accounts.google.com",
+    "email": APPROVER,
+    "email_verified": True,
+    "exp": 4102444800,
+}
 
 
 def test_auth_bearer_token_uses_verifier():
@@ -139,9 +160,61 @@ def test_auth_bearer_token_uses_verifier():
     assert auth.approver_from_request(headers, verifier=lambda t: f"v:{t}") == "v:tok-123"
 
 
-def test_auth_no_principal_raises():
+def test_auth_no_principal_raises_in_every_mode():
+    for mode in ("verify", "cloudrun-iam", "iap"):
+        with pytest.raises(PermissionError):
+            auth.approver_from_request({}, mode=mode)
+
+
+def test_auth_unknown_mode_refuses_all_principals():
     with pytest.raises(PermissionError):
-        auth.approver_from_request({})
+        auth.approver_from_request(dict(AUTHED), mode="trust-everyone", verifier=lambda t: "x")
+
+
+def test_plain_iap_header_never_grants_identity():
+    """Google's IAP guidance: the plain x-goog-authenticated-user-email
+    header is client-forgeable and MUST NOT be an identity source — in any
+    mode, with or without other credentials."""
+    for mode in ("verify", "cloudrun-iam", "iap"):
+        with pytest.raises(PermissionError):
+            auth.approver_from_request(dict(FORGED_PLAIN), mode=mode)
+    # forged header alongside a valid credential: identity is the CREDENTIAL's
+    headers = {**FORGED_PLAIN, "authorization": "Bearer tok"}
+    assert (
+        auth.approver_from_request(headers, mode="verify", verifier=lambda t: APPROVER) == APPROVER
+    )
+    platform = {**FORGED_PLAIN, "authorization": f"Bearer {_stripped_token(_GOOD_CLAIMS)}"}
+    assert auth.approver_from_request(platform, mode="cloudrun-iam") == APPROVER
+
+
+def test_iap_mode_uses_only_the_signed_assertion():
+    seen = []
+
+    def iap_verifier(assertion):
+        seen.append(assertion)
+        return "verified@example.com"
+
+    headers = {**FORGED_PLAIN, auth.IAP_ASSERTION_HEADER: "signed.jwt.value"}
+    assert (
+        auth.approver_from_request(headers, mode="iap", iap_verifier=iap_verifier)
+        == "verified@example.com"
+    )
+    assert seen == ["signed.jwt.value"]
+
+
+def test_iap_assertion_verification_failure_is_permission_error():
+    def broken(assertion):
+        raise ValueError("audience mismatch")
+
+    headers = {auth.IAP_ASSERTION_HEADER: "signed.jwt.value"}
+    with pytest.raises(PermissionError):
+        auth.approver_from_request(headers, mode="iap", iap_verifier=broken)
+
+
+def test_iap_default_verifier_fails_closed_without_audience(monkeypatch):
+    monkeypatch.delenv("IAP_AUDIENCE", raising=False)
+    with pytest.raises(PermissionError):
+        auth._iap_verify("any.assertion.value")
 
 
 # ---------- derived health (REG-1/REG-4) ----------
@@ -218,7 +291,7 @@ def approved_db():
 
 def test_dashboard_serves_page_and_catalog():
     db, _ = approved_db()
-    client = TestClient(create_app(db))
+    client = make_client(db)
     assert "FORGE Readiness Console" in client.get("/").text
     catalog = client.get("/api/catalog").json()
     orchestrator = next(d for d in catalog if d["agent_id"] == "forge-orchestrator")
@@ -228,7 +301,7 @@ def test_dashboard_serves_page_and_catalog():
 
 def test_dashboard_workflow_detail_renders_trail_and_pending():
     db, approval_id = approved_db()
-    client = TestClient(create_app(db))
+    client = make_client(db)
     detail = client.get(f"/api/workflows/{WF}").json()
     assert detail["state"]["status"] == "AWAITING_SCHEDULE_APPROVAL"
     assert [p["approval_id"] for p in detail["pending_approvals"]] == [approval_id]
@@ -239,7 +312,7 @@ def test_dashboard_workflow_detail_renders_trail_and_pending():
 
 def test_decide_requires_authenticated_principal():
     db, approval_id = approved_db()
-    client = TestClient(create_app(db))
+    client = make_client(db)
     response = client.post(
         f"/api/workflows/{WF}/decide", json={"approval_id": approval_id, "decision": "approved"}
     )
@@ -249,10 +322,10 @@ def test_decide_requires_authenticated_principal():
 
 def test_decide_rejects_client_supplied_identity():
     db, approval_id = approved_db()
-    client = TestClient(create_app(db))
+    client = make_client(db)
     response = client.post(
         f"/api/workflows/{WF}/decide",
-        headers=IAP,
+        headers=AUTHED,
         json={"approval_id": approval_id, "decision": "approved", "approver_identity": "spoof@x"},
     )
     assert response.status_code == 400
@@ -260,11 +333,11 @@ def test_decide_rejects_client_supplied_identity():
 
 def test_decide_validates_target_and_decision():
     db, approval_id = approved_db()
-    client = TestClient(create_app(db))
+    client = make_client(db)
     assert (
         client.post(
             f"/api/workflows/{WF}/decide",
-            headers=IAP,
+            headers=AUTHED,
             json={"approval_id": "apr-none", "decision": "approved"},
         ).status_code
         == 404
@@ -272,7 +345,7 @@ def test_decide_validates_target_and_decision():
     assert (
         client.post(
             f"/api/workflows/{WF}/decide",
-            headers=IAP,
+            headers=AUTHED,
             json={"approval_id": approval_id, "decision": "maybe"},
         ).status_code
         == 400
@@ -281,10 +354,10 @@ def test_decide_validates_target_and_decision():
 
 def test_decide_records_atomically_with_outbox_copy():
     db, approval_id = approved_db()
-    client = TestClient(create_app(db))
+    client = make_client(db)
     response = client.post(
         f"/api/workflows/{WF}/decide",
-        headers=IAP,
+        headers=AUTHED,
         json={"approval_id": approval_id, "decision": "approved", "comment": "part ETA accepted"},
     )
     assert response.status_code == 200
@@ -301,7 +374,7 @@ def test_decide_records_atomically_with_outbox_copy():
     # duplicate decision on the same approval -> 409, single record stands
     dup = client.post(
         f"/api/workflows/{WF}/decide",
-        headers=IAP,
+        headers=AUTHED,
         json={"approval_id": approval_id, "decision": "approved"},
     )
     assert dup.status_code == 404  # no longer pending
@@ -312,11 +385,11 @@ def test_decide_records_atomically_with_outbox_copy():
 
 def decided_db(decision="approved"):
     db, approval_id = approved_db()
-    client = TestClient(create_app(db))
+    client = make_client(db)
     assert (
         client.post(
             f"/api/workflows/{WF}/decide",
-            headers=IAP,
+            headers=AUTHED,
             json={"approval_id": approval_id, "decision": decision},
         ).status_code
         == 200
@@ -375,13 +448,13 @@ def test_full_release_loop_through_dashboard():
         consumer_identity="forge-orchestrator",
     )
     assert wf_status(db) == "AWAITING_RELEASE_APPROVAL"
-    client = TestClient(create_app(db))
+    client = make_client(db)
     (pending,) = client.get(f"/api/workflows/{WF}").json()["pending_approvals"]
     assert pending["action_type"] == "equipment_release"
     assert (
         client.post(
             f"/api/workflows/{WF}/decide",
-            headers=IAP,
+            headers=AUTHED,
             json={"approval_id": pending["approval_id"], "decision": "approved"},
         ).status_code
         == 200
@@ -406,11 +479,11 @@ def test_rejected_release_returns_to_rework():
         make_verdict_handler(db),
         consumer_identity="forge-orchestrator",
     )
-    client = TestClient(create_app(db))
+    client = make_client(db)
     (pending,) = client.get(f"/api/workflows/{WF}").json()["pending_approvals"]
     client.post(
         f"/api/workflows/{WF}/decide",
-        headers=IAP,
+        headers=AUTHED,
         json={"approval_id": pending["approval_id"], "decision": "rejected"},
     )
     decision = next(
@@ -463,31 +536,18 @@ def test_auth_verifier_failure_maps_to_permission_error():
         auth.approver_from_request({"authorization": "Bearer x.y.z"}, verifier=broken)
 
 
-def _stripped_token(claims):
-    import base64
-    import json
-
-    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
-    return f"header.{payload}"
-
-
-def test_platform_trust_path_reads_validated_claims(monkeypatch):
-    """Behind Cloud Run IAM (TRUST_PLATFORM_AUTH=1) identity comes from the
-    platform-validated token; issuer/expiry/verified-email still enforced."""
-    monkeypatch.setenv(auth.PLATFORM_TRUST_ENV, "1")
-    good = {
-        "iss": "https://accounts.google.com",
-        "email": "approver@example.com",
-        "email_verified": True,
-        "exp": 4102444800,
-    }
-    headers = {"authorization": f"Bearer {_stripped_token(good)}"}
-    assert auth.approver_from_request(headers) == "approver@example.com"
+def test_cloudrun_mode_reads_platform_validated_claims(monkeypatch):
+    """In mode cloudrun-iam (set only by the deploy, under
+    --no-allow-unauthenticated) identity comes from the platform-validated
+    token; issuer/expiry/verified-email still enforced."""
+    monkeypatch.setenv(auth.AUTH_MODE_ENV, "cloudrun-iam")
+    headers = {"authorization": f"Bearer {_stripped_token(_GOOD_CLAIMS)}"}
+    assert auth.approver_from_request(headers) == APPROVER
     for bad in (
-        {**good, "iss": "https://evil.example"},
-        {**good, "email_verified": False},
-        {**good, "exp": 1},
-        {k: v for k, v in good.items() if k != "email"},
+        {**_GOOD_CLAIMS, "iss": "https://evil.example"},
+        {**_GOOD_CLAIMS, "email_verified": False},
+        {**_GOOD_CLAIMS, "exp": 1},
+        {k: v for k, v in _GOOD_CLAIMS.items() if k != "email"},
     ):
         with pytest.raises(PermissionError):
             auth.approver_from_request({"authorization": f"Bearer {_stripped_token(bad)}"})
@@ -495,18 +555,11 @@ def test_platform_trust_path_reads_validated_claims(monkeypatch):
         auth.approver_from_request({"authorization": "Bearer not-a-jwt"})
 
 
-def test_platform_trust_off_still_fully_verifies(monkeypatch):
-    """Without the deploy-set flag the same stripped token is fully verified
-    and refused — the trust shortcut never applies outside Cloud Run."""
-    monkeypatch.delenv(auth.PLATFORM_TRUST_ENV, raising=False)
-    token = _stripped_token(
-        {
-            "iss": "https://accounts.google.com",
-            "email": "a@b.c",
-            "email_verified": True,
-            "exp": 4102444800,
-        }
-    )
+def test_default_mode_still_fully_verifies(monkeypatch):
+    """Without the deploy-set mode the same stripped token is fully verified
+    and refused — the platform shortcut never applies outside Cloud Run."""
+    monkeypatch.delenv(auth.AUTH_MODE_ENV, raising=False)
+    token = _stripped_token({**_GOOD_CLAIMS, "email": "a@b.c"})
     calls = []
 
     def verifier(t):
@@ -516,3 +569,103 @@ def test_platform_trust_off_still_fully_verifies(monkeypatch):
     with pytest.raises(PermissionError):
         auth.approver_from_request({"authorization": f"Bearer {token}"}, verifier=verifier)
     assert calls == [token]
+
+
+def test_whoami_reflects_principal_and_forged_header_gets_nothing():
+    """App-layer forged-header negatives: the plain IAP header alone is 401;
+    alongside a real credential the identity is the credential's."""
+    db, _ = approved_db()
+    client = make_client(db)
+    assert client.get("/api/whoami").status_code == 401
+    assert client.get("/api/whoami", headers=FORGED_PLAIN).status_code == 401
+    both = client.get("/api/whoami", headers={**FORGED_PLAIN, **AUTHED})
+    assert both.status_code == 200
+    assert both.json() == {"approver_identity": APPROVER}
+
+
+def test_forged_header_cannot_decide():
+    db, approval_id = approved_db()
+    client = make_client(db)
+    response = client.post(
+        f"/api/workflows/{WF}/decide",
+        headers=FORGED_PLAIN,
+        json={"approval_id": approval_id, "decision": "approved"},
+    )
+    assert response.status_code == 401
+    assert layout.approval_ref(db, WF, approval_id).get().to_dict() is None
+
+
+def test_decision_continues_request_trace_exactly():
+    """OBS-1/ICD-4: ONE trace per workflow — the decision's envelope carries
+    the approval_request's trace_id verbatim (which is itself the workflow
+    trace the verdict rode in on). No second application trace identifier."""
+    db, approval_id = approved_db()
+    (request,) = outbox_of_type(db, "approval_request.v2")
+    assert request["envelope"]["trace_id"] == TRACE
+    client = make_client(db)
+    assert (
+        client.post(
+            f"/api/workflows/{WF}/decide",
+            headers=AUTHED,
+            json={"approval_id": approval_id, "decision": "approved"},
+        ).status_code
+        == 200
+    )
+    (decision,) = outbox_of_type(db, "approval_decision.v2")
+    assert decision["envelope"]["trace_id"] == request["envelope"]["trace_id"] == TRACE
+    # the authoritative record and its audit carry the same trace
+    record = layout.approval_ref(db, WF, approval_id).get().to_dict()
+    assert record["message"]["envelope"]["trace_id"] == TRACE
+
+    def audit_traces():
+        return {
+            snapshot.to_dict()["envelope"]["trace_id"]
+            for snapshot in layout.workflow_ref(db, WF).collection("audit").stream()
+        }
+
+    assert audit_traces() == {TRACE}
+    # ...and STILL a single trace after the gate consumes the approval — the
+    # decision handler's transition + audits must ride the same trace too
+    process_message(db, decision, make_decision_handler(db), consumer_identity="forge-orchestrator")
+    assert wf_status(db) == "SUSPENDED_AWAITING_PART"
+    assert audit_traces() == {TRACE}
+
+
+def test_cloudrun_mode_malformed_claim_shapes_are_401_not_500(monkeypatch):
+    """Adversarial-verify finding: a payload that decodes to a non-dict JSON
+    value, or a non-numeric exp, must be refused as PermissionError (401) —
+    never escape as AttributeError/TypeError (500)."""
+    import base64
+    import json as jsonlib
+
+    monkeypatch.setenv(auth.AUTH_MODE_ENV, "cloudrun-iam")
+
+    def raw_token(payload_obj):
+        payload = base64.urlsafe_b64encode(jsonlib.dumps(payload_obj).encode()).decode().rstrip("=")
+        return f"header.{payload}"
+
+    for payload_obj in (
+        123,
+        "str",
+        [1, 2, 3],
+        {**_GOOD_CLAIMS, "exp": "soon"},
+        {**_GOOD_CLAIMS, "exp": [1]},
+        {**_GOOD_CLAIMS, "exp": {}},
+    ):
+        with pytest.raises(PermissionError):
+            auth.approver_from_request({"authorization": f"Bearer {raw_token(payload_obj)}"})
+
+
+def test_ci9_planned_with_code_caught_even_with_emptied_source_list():
+    """Adversarial-verify finding: the planned-vs-code guard must key off the
+    services/<key>/ directory, not only the entry's declared source list."""
+    import yaml
+    from scripts.check_config import ROOT, check_manifest
+
+    manifest = yaml.safe_load((ROOT / "architecture" / "manifest.yaml").read_text())
+    registry = yaml.safe_load((ROOT / "agents" / "registry.yaml").read_text())
+    residency = yaml.safe_load((ROOT / "infra" / "residency.yaml").read_text())
+    manifest["services"]["supply"]["status"] = "planned"
+    manifest["services"]["supply"]["source"] = []
+    failures = check_manifest(manifest, registry, residency)
+    assert any("supply" in f and "planned" in f for f in failures)

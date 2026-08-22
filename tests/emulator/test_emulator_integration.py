@@ -1475,7 +1475,6 @@ def test_day6_dashboard_gate_loop_real_client(db):
     the recorded approval ONCE -> RELEASED, all on the real client."""
     from fastapi.testclient import TestClient
     from services.dashboard.app import create_app
-    from services.dashboard.auth import IAP_HEADER
     from services.orchestrator.handlers import make_decision_handler, make_verdict_handler
 
     from forge_common import layout
@@ -1542,14 +1541,25 @@ def test_day6_dashboard_gate_loop_real_client(db):
                 return message
         raise AssertionError("no bus copy of the decision")
 
-    client = TestClient(create_app(db))
-    headers = {IAP_HEADER: "accounts.google.com:approver@example.test"}
+    client = TestClient(create_app(db, verifier=lambda token: "approver@example.test"))
+    headers = {
+        "authorization": "Bearer emu-test-token",
+        # forged plain IAP header rides along on EVERY call: identity must
+        # come from the verified credential, never from this header (HUM-1)
+        "x-goog-authenticated-user-email": "accounts.google.com:attacker@evil.example",
+    }
     process_message(
         db, verdict("plan"), make_verdict_handler(db), consumer_identity="forge-orchestrator"
     )
     assert layout.workflow_ref(db, wf).get().to_dict()["status"] == "AWAITING_SCHEDULE_APPROVAL"
     (request,) = pending(client)
     assert request["action_type"] == "schedule_override"
+    request_traces = {
+        s.to_dict()["message"]["envelope"]["trace_id"]
+        for s in db.collection("workflows").document(wf).collection("outbox").stream()
+        if s.to_dict()["message"]["envelope"]["schema_version"] == "approval_request.v2"
+    }
+    assert request_traces == {trace}
     assert (
         client.post(
             f"/api/workflows/{wf}/decide",
@@ -1566,6 +1576,12 @@ def test_day6_dashboard_gate_loop_real_client(db):
     )
     doc = layout.workflow_ref(db, wf).get().to_dict()
     assert (doc["status"], doc["due_at"]) == ("SUSPENDED_AWAITING_PART", 21)
+    # OBS-1/ICD-4: the human decision CONTINUED the workflow trace exactly —
+    # the surface never mints a second application trace identifier — and the
+    # approver is the verified credential's principal, not the forged header
+    override_copy = decision_copy(request["approval_id"])
+    assert override_copy["envelope"]["trace_id"] == trace
+    assert override_copy["payload"]["approver_identity"] == "approver@example.test"
 
     walk_to(db, wf, ["ASSEMBLY_RESUMED"], trace=trace)
     process_message(
@@ -1598,3 +1614,9 @@ def test_day6_dashboard_gate_loop_real_client(db):
     }
     process_message(db, replay, make_decision_handler(db), consumer_identity="forge-orchestrator")
     assert layout.workflow_ref(db, wf).get().to_dict()["status"] == "RELEASED"
+    # the ENTIRE audit trail — through both gates to RELEASED — carries ONE trace
+    audit_traces = {
+        s.to_dict()["envelope"]["trace_id"]
+        for s in db.collection("workflows").document(wf).collection("audit").stream()
+    }
+    assert audit_traces == {trace}

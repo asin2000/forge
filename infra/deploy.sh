@@ -89,9 +89,11 @@ gcloud run deploy forge-dashboard \
   --source . \
   --service-account "forge-dashboard@${PROJECT_ID}.iam.gserviceaccount.com" \
   --no-allow-unauthenticated \
-  --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},TRUST_PLATFORM_AUTH=1" \
-  `# TRUST_PLATFORM_AUTH: Cloud Run IAM verifies the caller ID token and strips` \
-  `# its signature before forwarding — safe ONLY with --no-allow-unauthenticated` \
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},FORGE_AUTH_MODE=cloudrun-iam" \
+  `# cloudrun-iam: identity ONLY from the platform-validated bearer token (Cloud` \
+  `# Run strips its signature after verifying) — safe ONLY with` \
+  `# --no-allow-unauthenticated. The plain x-goog-authenticated-user-email` \
+  `# header is client-forgeable and is ignored in every mode (HUM-1).` \
   --quiet
 fi
 

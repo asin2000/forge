@@ -3,7 +3,9 @@
 # Definition lifecycle: DRAFT | APPROVED | DEPRECATED | RETIRED.
 # Runtime instances (IDLE | RESERVE | ACTIVE | FAILED) and derived health
 # (HEALTHY | STALE | UNKNOWN) live in Firestore, never in this file (REG-1).
-# `endpoint: deploy-time` is resolved to the Cloud Run URL by the loader;
+# `endpoint: null` until the Lane-2 worker deployment (Day 7) records the
+# real Cloud Run URL; CI-9 rejects placeholder strings and requires a real
+# URL once architecture/manifest.yaml marks the role deployed;
 # `service_identity` is the per-role service account (AGT-6).
 version: 1
 agents:
@@ -16,7 +18,7 @@ agents:
       consumes: [nmc_event.v2, maintenance_action_plan.v2, sourcing_report.v3, roster_assignment.v2, validation_verdict.v2, quarantine_verdict.v3, approval_decision.v2, agent_failure_event.v2, due_event.v2]
       produces: [work_package_assignment.v2, approval_request.v2, audit_event.v2]
     service_identity: forge-orchestrator@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: deploy-time
+    endpoint: null
     permitted_tools: [firestore-workflow-state, pubsub-publish, logical-clock]
   - agent_id: forge-maintenance
     version: 0.1.0
@@ -27,7 +29,7 @@ agents:
       consumes: [work_package_assignment.v2]
       produces: [maintenance_action_plan.v2, audit_event.v2]
     service_identity: forge-maintenance@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: deploy-time
+    endpoint: null
     permitted_tools: [procedures-library-read, pubsub-publish]
   - agent_id: forge-supply
     version: 0.1.0
@@ -38,7 +40,7 @@ agents:
       consumes: [work_package_assignment.v2]
       produces: [sourcing_report.v3, audit_event.v2]
     service_identity: forge-supply@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: deploy-time
+    endpoint: null
     permitted_tools: [approved-parts-registry-read, pubsub-publish]
   - agent_id: forge-workforce
     version: 0.1.0
@@ -49,7 +51,7 @@ agents:
       consumes: [work_package_assignment.v2]
       produces: [roster_assignment.v2, audit_event.v2]
     service_identity: forge-workforce@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: deploy-time
+    endpoint: null
     permitted_tools: [qualification-records-read, pubsub-publish]
   - agent_id: forge-safety
     version: 0.1.0
@@ -60,7 +62,7 @@ agents:
       consumes: [maintenance_action_plan.v2, quarantine_verdict.v3, roster_assignment.v2, sourcing_report.v3]
       produces: [validation_verdict.v2, audit_event.v2]
     service_identity: forge-safety@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: deploy-time
+    endpoint: null
     permitted_tools: [procedures-library-read, approved-parts-registry-read, pubsub-publish]
   - agent_id: forge-cyber-trust
     version: 0.1.0
@@ -71,5 +73,5 @@ agents:
       consumes: []          # reads quarantine storage only; no bus consumption (SEC-4)
       produces: [quarantine_verdict.v3, audit_event.v2]
     service_identity: forge-cyber-trust@PROJECT_ID.iam.gserviceaccount.com
-    endpoint: deploy-time
+    endpoint: null
     permitted_tools: [quarantine-storage-read, model-armor-screen, pubsub-publish]
