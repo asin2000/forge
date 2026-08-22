@@ -85,8 +85,8 @@ ensure_topic_and_subscription(project, "forge-bus", "forge-bus-audit-tap")
 print("   forge-bus, forge-bus-dlq (+dlq inspection sub) ready")
 PYEOF
 
-echo "== per-topic publisher bindings (agents + dashboard publish; nothing more)"
-for role in "${AGENT_ROLES[@]}" dashboard; do
+echo "== per-topic publisher bindings (agents + cyber-trust + dashboard; nothing more)"
+for role in "${AGENT_ROLES[@]}" cyber-trust dashboard; do
   SA="forge-${role}@${PROJECT_ID}.iam.gserviceaccount.com"
   gcloud pubsub topics add-iam-policy-binding "$TOPIC" --project "$PROJECT_ID" --quiet >/dev/null \
     --member "serviceAccount:${SA}" --role roles/pubsub.publisher

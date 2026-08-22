@@ -46,10 +46,14 @@ def run(cmd: list[str], impersonate: str | None = None) -> tuple[int, str]:
 
 
 def token_for(role: str) -> str | None:
-    code, out = run(
-        ["gcloud", "auth", "print-access-token", f"--impersonate-service-account={sa(role)}"]
+    # stdout ONLY — the impersonation WARNING goes to stderr and must never
+    # contaminate the bearer token
+    proc = subprocess.run(
+        ["gcloud", "auth", "print-access-token", f"--impersonate-service-account={sa(role)}"],
+        capture_output=True,
+        text=True,
     )
-    return out.strip() if code == 0 else None
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
 
 
 def vertex_call_denied(role: str) -> tuple[bool, str]:
