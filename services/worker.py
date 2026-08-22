@@ -99,6 +99,12 @@ def create_worker(
     consumer_identity = f"forge-{role.replace('_', '-')}"
     app = FastAPI(title=f"FORGE worker {role}", docs_url=None, redoc_url=None)
 
+    # Served on /health AND /healthz: Google's front end INTERCEPTS
+    # /healthz on *.run.app and returns its own HTML 404 — the request never
+    # reaches the container (found live: the REG-1 probe got GFE 404s while
+    # GET / reached FastAPI). The probe targets /health; /healthz stays for
+    # local tooling that never crosses the GFE.
+    @app.get("/health")
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"role": role, "status": "serving"}
