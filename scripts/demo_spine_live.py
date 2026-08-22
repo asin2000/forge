@@ -256,8 +256,14 @@ def main() -> int:
     days = int(doc["due_at"]) - int(doc["logical_time"])
     print(f"advancing the Logical Clock {days} simulated days (ORC-5)")
     advance_clock(db, days)
+    # The per-minute production heartbeat ALSO emits due events — if it fires
+    # in the window after the advance, our own emit correctly returns [] for
+    # the already-emitted event (at-least-once + idempotent dedupe, by
+    # design). Asserting that WE were the emitter raced the scheduler and
+    # failed an otherwise-perfect run; the real guarantee is the workflow
+    # RESUMING, which wait_for below asserts.
     emitted = emit_due_events(db)
-    assert WF in emitted, emitted
+    print(f"   due emission: {'this driver' if WF in emitted else 'the production heartbeat'}")
     drain_outbox(db, WF, publish)
     wait_for("ASSEMBLY_RESUMED")
     wait_for("AWAITING_RELEASE_APPROVAL")
