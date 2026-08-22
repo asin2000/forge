@@ -99,7 +99,7 @@ def build_due_event(
     return message
 
 
-def emit_due_events(db: Any, *, trace_id: str) -> list[str]:
+def emit_due_events(db: Any) -> list[str]:
     """Enqueue due events for every workflow whose due day has arrived.
 
     The logical time is read from the clock document — never trusted from a
@@ -107,8 +107,11 @@ def emit_due_events(db: Any, *, trace_id: str) -> list[str]:
     RE-CHECKED transactionally (status is SUSPENDED_AWAITING_PART, due_at
     still set and due against the clock read in the same transaction) before
     the due event is created, so a stale scan or a caller race cannot emit
-    early or against changed state. Returns workflow_ids newly enqueued;
-    re-running after a crash or a double-fired advance adds nothing.
+    early or against changed state. Each due event rides the WORKFLOW's root
+    trace (state doc trace_id, OBS-1) — never a caller-supplied one, so this
+    unattended producer can never mint a second application trace. Returns
+    workflow_ids newly enqueued; re-running after a crash or a double-fired
+    advance adds nothing.
     """
     emitted: list[str] = []
     for snapshot in db.collection("workflows").stream():
@@ -128,7 +131,8 @@ def emit_due_events(db: Any, *, trace_id: str) -> list[str]:
                 or current["due_at"] > logical_now
             ):
                 return False
-            msg = build_due_event(workflow_id=wid, trace_id=trace_id, due_at=current["due_at"])
+            trace = current.get("trace_id") or deterministic_trace_id(wid)
+            msg = build_due_event(workflow_id=wid, trace_id=trace, due_at=current["due_at"])
             eid = msg["envelope"]["event_id"]
             if layout.txn_get_dict(txn, layout.outbox_ref(db, wid, eid)):
                 return False

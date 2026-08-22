@@ -54,7 +54,9 @@ def derive_health(last_heartbeat_at: str | None, *, now: str | None = None) -> s
     return "HEALTHY" if age <= STALE_AFTER_SECONDS else "STALE"
 
 
-def create_app(db: Any, *, verifier: Any = None, iap_verifier: Any = None) -> FastAPI:
+def create_app(
+    db: Any, *, verifier: Any = None, iap_verifier: Any = None, publish: Any = None
+) -> FastAPI:
     app = FastAPI(title="FORGE dashboard", docs_url=None, redoc_url=None)
     verify: dict[str, Any] = {}
     if verifier is not None:
@@ -103,6 +105,9 @@ def create_app(db: Any, *, verifier: Any = None, iap_verifier: Any = None) -> Fa
                     "agent_identity": e["payload"]["agent_identity"],
                     "state_after": e["payload"].get("state_after"),
                     "detail": e["payload"].get("detail"),
+                    # DAT-2: both labels displayed in the rendered trail
+                    "data_origin": e["envelope"].get("data_origin"),
+                    "trust_state": e["envelope"].get("trust_state"),
                 }
                 for e in trail
             ],
@@ -199,6 +204,12 @@ def create_app(db: Any, *, verifier: Any = None, iap_verifier: Any = None) -> Fa
             state.record_approval_decision(db, message, enqueue_outbox=True)
         except state.GateBlocked as exc:
             raise HTTPException(409, str(exc)) from exc
+        if publish is not None:
+            # best-effort post-commit drain: a failure here leaves the copy
+            # unpublished in the outbox, and the next drain republishes it
+            from forge_common.bus import drain_outbox
+
+            drain_outbox(db, workflow_id, publish)
         return {"approval_id": approval_id, "decision": decision, "approver": approver}
 
     return app
@@ -209,5 +220,14 @@ def production_app() -> FastAPI:  # pragma: no cover - Cloud Run entrypoint
 
     from google.cloud import firestore
 
+    from forge_common import otel
+    from forge_common.pubsub import OrderedPublisher
+
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("PROJECT_ID")
-    return create_app(firestore.Client(project=project))
+    topic = os.environ.get("FORGE_BUS_TOPIC", "forge-bus")
+    otel.init_tracing("forge-dashboard")
+    publisher = OrderedPublisher(project)
+    return create_app(
+        firestore.Client(project=project),
+        publish=lambda message, key: publisher.publish(topic, message, key),
+    )

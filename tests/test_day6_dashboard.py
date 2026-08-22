@@ -95,15 +95,14 @@ def seed_sourcing_report(db, *, eta_days=21):
     return message
 
 
-def verdict_message(*, verdict="approved", subject="plan", reasons=None):
-    subject_event_id = deterministic_event_id("t-subject", WF, subject)
+def verdict_message(*, verdict="approved", subject_event_id, reasons=None):
     message = {
         "envelope": build_envelope(
             workflow_id=WF,
             schema_version="validation_verdict.v2",
-            event_id=deterministic_event_id("t-verdict", WF, subject, verdict),
+            event_id=deterministic_event_id("t-verdict", WF, subject_event_id, verdict),
             trace_id=TRACE,
-            idempotency_key=f"idem-t-verdict-{subject}-{verdict}",
+            idempotency_key=f"idem-t-verdict-{subject_event_id[:8]}-{verdict}",
         ),
         "payload": {
             "subject_event_id": subject_event_id,
@@ -113,6 +112,34 @@ def verdict_message(*, verdict="approved", subject="plan", reasons=None):
         },
     }
     validate_message(message)
+    return message
+
+
+def seed_roster(db):
+    message = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            work_package_id=f"wp-workforce-{WF.removeprefix('wf-')}",
+            schema_version="roster_assignment.v2",
+            event_id=deterministic_event_id("t-roster", WF),
+            trace_id=TRACE,
+            idempotency_key="idem-t-roster-day6",
+        ),
+        "payload": {
+            "assignments": [
+                {
+                    "task_code": "TC-101",
+                    "technician_id": "T-1001",
+                    "qualification_id": "Q-HYD-101",
+                    "shift": "day",
+                }
+            ]
+        },
+    }
+    validate_message(message)
+    layout.outbox_ref(db, WF, message["envelope"]["event_id"]).set(
+        {"message": message, "published": False, "enqueued_at": now_iso()}
+    )
     return message
 
 
@@ -232,9 +259,12 @@ def test_health_derived_from_heartbeat_staleness():
 
 def test_approved_verdict_enters_schedule_gate_with_decision_record():
     db = ready_db()
-    seed_sourcing_report(db, eta_days=21)
+    sourcing = seed_sourcing_report(db, eta_days=21)
     process_message(
-        db, verdict_message(), make_verdict_handler(db), consumer_identity="forge-orchestrator"
+        db,
+        verdict_message(subject_event_id=sourcing["envelope"]["event_id"]),
+        make_verdict_handler(db),
+        consumer_identity="forge-orchestrator",
     )
     assert wf_status(db) == "AWAITING_SCHEDULE_APPROVAL"
     (request,) = outbox_of_type(db, "approval_request.v2")
@@ -246,21 +276,71 @@ def test_approved_verdict_enters_schedule_gate_with_decision_record():
     assert payload["versions"]["agent_id"] == "forge-orchestrator"
 
 
-def test_approved_verdict_without_sourcing_evidence_escalates():
+def test_verdict_before_sourcing_report_holds_then_report_opens_gate():
+    """Live push delivery makes arrival order arbitrary: a verdict landing
+    BEFORE the sourcing report is HELD (never a block); the report's
+    arrival opens the gate — whichever lands last opens it."""
+    from services.orchestrator.handlers import make_sourcing_report_handler
+
     db = ready_db()
-    process_message(
-        db, verdict_message(), make_verdict_handler(db), consumer_identity="forge-orchestrator"
+    # the verdict's subject is the plan; seed the plan message it judges
+    plan = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            work_package_id=f"wp-maintenance-{WF.removeprefix('wf-')}",
+            schema_version="maintenance_action_plan.v2",
+            event_id=deterministic_event_id("t-plan", WF),
+            trace_id=TRACE,
+            idempotency_key="idem-t-plan-day6",
+        ),
+        "payload": {
+            "plan_id": "plan-day6-01",
+            "equipment_id": "GX12-07",
+            "tasks": [
+                {
+                    "task_code": "TC-101",
+                    "title": "Replace actuator",
+                    "est_hours": 6.5,
+                    "parts_required": [{"part_number": "HYD-ACT-4402", "qty": 1}],
+                }
+            ],
+        },
+    }
+    validate_message(plan)
+    layout.outbox_ref(db, WF, plan["envelope"]["event_id"]).set(
+        {"message": plan, "published": False, "enqueued_at": now_iso()}
     )
-    assert wf_status(db) == "BLOCKED_AGENT_FAILURE"
+    verdict = verdict_message(subject_event_id=plan["envelope"]["event_id"])
+    # on the real bus the verdict sits in the workflow outbox (safety
+    # published it there); the sourcing handler's held-verdict lookup
+    # depends on that record
+    layout.outbox_ref(db, WF, verdict["envelope"]["event_id"]).set(
+        {"message": verdict, "published": True, "enqueued_at": now_iso()}
+    )
+    process_message(db, verdict, make_verdict_handler(db), consumer_identity="forge-orchestrator")
+    assert wf_status(db) == "VALIDATING"
     assert outbox_of_type(db, "approval_request.v2") == []
-    assert "NO_SOURCING_EVIDENCE" in audit_reasons(db)
+    assert "VERDICT_HELD_AWAITING_EVIDENCE" in audit_reasons(db)
+    # now the sourcing report lands: ITS handler opens the gate
+    sourcing = seed_sourcing_report(db)
+    process_message(
+        db, sourcing, make_sourcing_report_handler(db), consumer_identity="forge-orchestrator"
+    )
+    assert wf_status(db) == "AWAITING_SCHEDULE_APPROVAL"
+    (request,) = outbox_of_type(db, "approval_request.v2")
+    assert "resume_on_day:21" in request["payload"]["constraints"]
 
 
 def test_vetoed_verdict_returns_to_planning():
     db = ready_db()
+    sourcing = seed_sourcing_report(db)
     process_message(
         db,
-        verdict_message(verdict="vetoed", reasons=["SP-PART-001: part not approved"]),
+        verdict_message(
+            verdict="vetoed",
+            subject_event_id=sourcing["envelope"]["event_id"],
+            reasons=["SP-PART-001: part not approved"],
+        ),
         make_verdict_handler(db),
         consumer_identity="forge-orchestrator",
     )
@@ -269,8 +349,12 @@ def test_vetoed_verdict_returns_to_planning():
 
 def test_stale_verdict_is_audited_noop():
     db = ready_db(status="PLANNING")
+    sourcing = seed_sourcing_report(db)
     process_message(
-        db, verdict_message(), make_verdict_handler(db), consumer_identity="forge-orchestrator"
+        db,
+        verdict_message(subject_event_id=sourcing["envelope"]["event_id"]),
+        make_verdict_handler(db),
+        consumer_identity="forge-orchestrator",
     )
     assert wf_status(db) == "PLANNING"
     assert "VERDICT_STALE" in audit_reasons(db)
@@ -282,9 +366,12 @@ def test_stale_verdict_is_audited_noop():
 def approved_db():
     """Workflow at AWAITING_SCHEDULE_APPROVAL with a pending request."""
     db = ready_db()
-    seed_sourcing_report(db)
+    sourcing = seed_sourcing_report(db)
     process_message(
-        db, verdict_message(), make_verdict_handler(db), consumer_identity="forge-orchestrator"
+        db,
+        verdict_message(subject_event_id=sourcing["envelope"]["event_id"]),
+        make_verdict_handler(db),
+        consumer_identity="forge-orchestrator",
     )
     return db, outbox_of_type(db, "approval_request.v2")[0]["payload"]["approval_id"]
 
@@ -441,9 +528,12 @@ def test_full_release_loop_through_dashboard():
     db, bus_copy = decided_db()
     process_message(db, bus_copy, make_decision_handler(db), consumer_identity="forge-orchestrator")
     _transition(db, "ASSEMBLY_RESUMED")
+    roster = seed_roster(db)
     process_message(
         db,
-        verdict_message(subject="repair-done", reasons=["post-repair checks passed"]),
+        verdict_message(
+            subject_event_id=roster["envelope"]["event_id"], reasons=["post-repair checks passed"]
+        ),
         make_verdict_handler(db),
         consumer_identity="forge-orchestrator",
     )
@@ -473,9 +563,10 @@ def test_rejected_release_returns_to_rework():
     db, bus_copy = decided_db()
     process_message(db, bus_copy, make_decision_handler(db), consumer_identity="forge-orchestrator")
     _transition(db, "ASSEMBLY_RESUMED")
+    roster = seed_roster(db)
     process_message(
         db,
-        verdict_message(subject="repair-done"),
+        verdict_message(subject_event_id=roster["envelope"]["event_id"]),
         make_verdict_handler(db),
         consumer_identity="forge-orchestrator",
     )
@@ -499,9 +590,14 @@ def test_vetoed_release_verdict_blocks_for_human_attention():
     db, bus_copy = decided_db()
     process_message(db, bus_copy, make_decision_handler(db), consumer_identity="forge-orchestrator")
     _transition(db, "ASSEMBLY_RESUMED")
+    roster = seed_roster(db)
     process_message(
         db,
-        verdict_message(subject="repair-done", verdict="vetoed", reasons=["leak detected"]),
+        verdict_message(
+            subject_event_id=roster["envelope"]["event_id"],
+            verdict="vetoed",
+            reasons=["leak detected"],
+        ),
         make_verdict_handler(db),
         consumer_identity="forge-orchestrator",
     )
@@ -669,3 +765,15 @@ def test_ci9_planned_with_code_caught_even_with_emptied_source_list():
     manifest["services"]["supply"]["source"] = []
     failures = check_manifest(manifest, registry, residency)
     assert any("supply" in f and "planned" in f for f in failures)
+
+
+def test_audit_trail_render_carries_dat2_labels():
+    """DAT-2: data_origin and trust_state are displayed in the rendered
+    audit trail (API layer feeding the dashboard table)."""
+    db, _ = approved_db()
+    client = make_client(db)
+    trail = client.get(f"/api/workflows/{WF}").json()["audit_trail"]
+    assert trail
+    for entry in trail:
+        assert entry["data_origin"] == "SYNTHETIC"
+        assert entry["trust_state"] == "TRUSTED"

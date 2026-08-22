@@ -50,6 +50,7 @@ def main() -> int:
     strict_flag = "--strict" in sys.argv
     data = yaml.safe_load(TRACE.read_text())
     strict = bool(data.get("strict", False)) or strict_flag
+    pending_allowed = set(data.get("pending_allowed", []))
     reqs = data.get("requirements", {})
     failures: list[str] = []
 
@@ -69,7 +70,7 @@ def main() -> int:
                 continue
             for v in values:
                 if v == "pending":
-                    if strict:
+                    if strict and rid not in pending_allowed:
                         failures.append(f"{rid}: {field} still 'pending' in strict mode")
                 else:
                     referenced.add(v.rstrip("/"))

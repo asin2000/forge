@@ -41,10 +41,10 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from forge_common import layout, registry, state
+from forge_common import layout, otel, registry, state
 from forge_common.audit import build_audit_event, now_iso
 from forge_common.contracts import ContractViolation, validate_message
-from forge_common.messages import sha256_hex
+from forge_common.messages import deterministic_event_id, sha256_hex
 
 CYBER_TRUST_IDENTITY = "forge-cyber-trust"
 
@@ -68,6 +68,22 @@ class DeliveryInProgress(Exception):
 
 #: How long a handler may run before its claim can be taken over.
 DEFAULT_LEASE_SECONDS = 120
+
+
+def _rekey_completion(message: dict[str, Any], workflow_id: str, epoch: str) -> dict[str, Any]:
+    """Re-keyed copy of a completion verdict for post-resume routing.
+    The event id folds the RESUME EPOCH (= the workflow's logical day at
+    resume, which equals due_at), so replays dedupe and a second suspension
+    produces a fresh id instead of an AlreadyExists crash-loop."""
+    subject = message["payload"]["subject_event_id"]
+    return {
+        "envelope": {
+            **message["envelope"],
+            "event_id": deterministic_event_id("resume-reverdict", workflow_id, subject, epoch),
+            "idempotency_key": f"idem-resume-reverdict-{subject[:8]}-{epoch}",
+        },
+        "payload": message["payload"],
+    }
 
 
 @dataclasses.dataclass
@@ -96,6 +112,19 @@ class TxnWrites:
     #: applied atomically with the rest of the plan; skipped when the package
     #: is no longer ASSIGNED under the expected owner.
     work_package_status_updates: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    #: Roster (completion) verdict consumed PRE-resume: {"message": verdict}.
+    #: The committing txn RE-READS the workflow doc — if the resume raced in
+    #: during the handler->commit window, the evidence is re-keyed onto the
+    #: bus instead of parked; otherwise the completion marker doc is set
+    #: (latest verdict wins). One half of the release-gate race closure.
+    completion_evidence: dict[str, Any] | None = None
+    #: Due handler's resume re-key request: {"due_at": int}. The committing
+    #: txn READS the completion marker; if evidence exists, a re-keyed copy
+    #: (event id folded with the resume epoch — replay- and second-
+    #: suspension-safe) is created ATOMICALLY with the resume transition.
+    #: The other half of the race closure: whichever side commits second
+    #: sees the first side's durable record.
+    resume_rekey: dict[str, Any] | None = None
     #: A specialist's ENTIRE package-scoped result under ONE ownership guard:
     #: {work_package_id, expected_owner, status, outbox_messages, audit_events}.
     #: If the package is no longer ASSIGNED under expected_owner at commit
@@ -173,6 +202,7 @@ def process_message(
     *,
     consumer_identity: str,
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    transport_attributes: dict[str, str] | None = None,
 ) -> bool:
     """Consume one bus message idempotently; True if side effects ran.
 
@@ -180,16 +210,54 @@ def process_message(
     the idempotency_key (ICD-5/ICD-6). Raises ContractViolation (ICD-2) or
     UntrustedMessageRejected (DAT-2) after writing a blocked_action audit
     event — rejected and audited, never coerced.
+
+    ``transport_attributes`` are the Pub/Sub message attributes: the W3C
+    ``traceparent`` there is the authoritative trace context (OBS-1); the
+    whole consumption runs under one metadata-only span (OBS-2), which ADK's
+    own agent/model spans nest beneath.
     """
+    envelope_for_span = message.get("envelope", {}) if isinstance(message, dict) else {}
+    if not isinstance(envelope_for_span, dict) or "trace_id" not in envelope_for_span:
+        return _process_message_inner(
+            db,
+            message,
+            handler,
+            consumer_identity=consumer_identity,
+            lease_seconds=lease_seconds,
+        )
+    with otel.consume_span(consumer_identity, envelope_for_span, transport_attributes) as span:
+        result = _process_message_inner(
+            db,
+            message,
+            handler,
+            consumer_identity=consumer_identity,
+            lease_seconds=lease_seconds,
+        )
+        span.set_attribute("forge.outcome", "processed" if result else "deduplicated")
+        return result
+
+
+def _process_message_inner(
+    db: Any,
+    message: dict[str, Any],
+    handler: Callable[[dict[str, Any], TxnWrites], None],
+    *,
+    consumer_identity: str,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+) -> bool:
     try:
         validate_message(message)
-    except ContractViolation:
+    except ContractViolation as exc:
         _audit_rejection(
             db,
             message,
             consumer_identity=consumer_identity,
             reason_code="CONTRACT_VIOLATION_REJECTED",
         )
+        # the worker acks (200) ONLY violations that were audited here at
+        # the INPUT boundary; an output-side violation carries no marker and
+        # falls through to 500 -> DLQ (visible, never silent loss)
+        exc.audited_input_rejection = True
         raise
     envelope = message["envelope"]
     if envelope["trust_state"] != "TRUSTED" and consumer_identity != CYBER_TRUST_IDENTITY:
@@ -305,6 +373,39 @@ def process_message(
                 or current.get("status") == "done"
             ):
                 return False  # claim lost to a takeover — the holder will commit
+            # Release-gate race closure READS (before any write):
+            evidence_wf_doc = None
+            if writes.completion_evidence is not None:
+                evidence_wf_doc = layout.txn_get_dict(txn, layout.workflow_ref(db, workflow_id))
+            rekey_plan = None
+            if writes.resume_rekey is not None:
+                held = layout.txn_get_dict(txn, layout.completion_evidence_ref(db, workflow_id))
+                if held is not None:
+                    candidate = _rekey_completion(
+                        held["message"], workflow_id, str(writes.resume_rekey["due_at"])
+                    )
+                    existing = layout.txn_get_dict(
+                        txn,
+                        layout.outbox_ref(db, workflow_id, candidate["envelope"]["event_id"]),
+                    )
+                    if existing is None:
+                        rekey_plan = candidate
+            raced_rekey_plan = None
+            if (
+                writes.completion_evidence is not None
+                and evidence_wf_doc is not None
+                and evidence_wf_doc.get("status") == "ASSEMBLY_RESUMED"
+            ):
+                candidate = _rekey_completion(
+                    writes.completion_evidence["message"],
+                    workflow_id,
+                    str(evidence_wf_doc.get("logical_time", 0)),
+                )
+                existing = layout.txn_get_dict(
+                    txn, layout.outbox_ref(db, workflow_id, candidate["envelope"]["event_id"])
+                )
+                if existing is None:
+                    raced_rekey_plan = candidate
             # All claim-eligibility and reassignment READS precede any
             # write (REG-2/ORC-3; real Firestore requires reads first).
             for claim in writes.work_package_claims:
@@ -348,8 +449,41 @@ def process_message(
                     )
             if writes.transition is not None:
                 state.apply_transition(txn, db, workflow_id=workflow_id, **writes.transition)
+            if writes.completion_evidence is not None:
+                if raced_rekey_plan is not None:
+                    # the resume committed during the handler->commit window:
+                    # the evidence goes straight back onto the bus
+                    txn.create(
+                        layout.outbox_ref(
+                            db, workflow_id, raced_rekey_plan["envelope"]["event_id"]
+                        ),
+                        {
+                            "message": raced_rekey_plan,
+                            "published": False,
+                            "enqueued_at": now_iso(),
+                        },
+                    )
+                else:
+                    txn.set(
+                        layout.completion_evidence_ref(db, workflow_id),
+                        {
+                            "message": writes.completion_evidence["message"],
+                            "recorded_at": now_iso(),
+                        },
+                    )
+            if rekey_plan is not None:
+                txn.create(
+                    layout.outbox_ref(db, workflow_id, rekey_plan["envelope"]["event_id"]),
+                    {"message": rekey_plan, "published": False, "enqueued_at": now_iso()},
+                )
             for claim in writes.work_package_claims:
-                registry.claim_work_package(txn, db, workflow_id=workflow_id, **claim)
+                registry.claim_work_package(
+                    txn,
+                    db,
+                    workflow_id=workflow_id,
+                    trace_id=envelope["trace_id"],
+                    **claim,
+                )
             for reassignment, plan in zip(writes.reassignments, plans, strict=True):
                 registry.apply_reassignment(
                     txn, db, workflow_id=workflow_id, **reassignment, plan=plan

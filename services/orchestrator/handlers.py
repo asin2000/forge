@@ -387,6 +387,46 @@ def make_plan_handler(db: Any):
             "equipment_id": plan["equipment_id"],
             "plan_id": plan["plan_id"],
         }
+        standing = _get_dict(
+            layout.work_package_ref(
+                db, workflow_id, f"wp-workforce-{workflow_id.removeprefix('wf-')}"
+            )
+        )
+        if standing is not None:
+            # REPLAN (veto -> PLANNING -> revised plan): the staffing package
+            # already exists and stays with its owner — re-claiming would
+            # collide and NACK-loop into the DLQ. Replans REVALIDATE (Safety
+            # sees the revised plan in VALIDATING); staffing changes belong
+            # to the ORC-3 reassignment machinery, never to a replan.
+            wf = _get_dict(layout.workflow_ref(db, workflow_id))
+            if (wf or {}).get("status") == "PLANNING":
+                writes.transition = {
+                    "target": "VALIDATING",
+                    "agent_identity": ORCHESTRATOR_IDENTITY,
+                    "trace_id": trace_id,
+                    "reason_code": "PLAN_REVISED",
+                    "detail": bounded_json_detail({"plan_id": plan["plan_id"]}),
+                }
+            else:
+                # A revised plan racing its own veto (workflow still
+                # VALIDATING) is consumed but cannot transition. AUDITED so
+                # the trail shows the held revision. Today no automated
+                # replan producer exists (humans resubmit under a fresh
+                # event id); before automating replans, an in-band
+                # re-trigger must land here — see docs/decisions.md.
+                writes.audit_events.append(
+                    build_audit_event(
+                        workflow_id=workflow_id,
+                        trace_id=trace_id,
+                        agent_identity=ORCHESTRATOR_IDENTITY,
+                        event_kind="escalation",
+                        reason_code="PLAN_REVISION_HELD",
+                        input_obj={"plan_id": plan["plan_id"]},
+                        output_obj={"status": (wf or {}).get("status")},
+                        effective_at=read_clock(db),
+                    )
+                )
+            return
         try:
             resolved = registry.discover(db, "technician-assignment")
         except registry.NoCapableAgent as exc:
@@ -420,6 +460,19 @@ def make_plan_handler(db: Any):
                 "inputs": inputs,
             }
         )
+        wf = _get_dict(layout.workflow_ref(db, workflow_id))
+        if (wf or {}).get("status") == "PLANNING":
+            # the plan is in hand: Safety validates it in VALIDATING and the
+            # verdict handler routes onward. apply_transition re-validates
+            # the edge transactionally; a raced state aborts and redelivery
+            # re-reads (never a NACK loop on an illegal edge).
+            writes.transition = {
+                "target": "VALIDATING",
+                "agent_identity": ORCHESTRATOR_IDENTITY,
+                "trace_id": trace_id,
+                "reason_code": "PLAN_RECEIVED",
+                "detail": bounded_json_detail({"plan_id": plan["plan_id"]}),
+            }
 
     return handle
 
@@ -498,24 +551,115 @@ def build_approval_request(
     return message
 
 
+def _subject_schema(db: Any, workflow_id: str, subject_event_id: str) -> str | None:
+    """Schema of the outbox message a verdict passes judgment on — verdicts
+    route by WHAT they validated (plan/sourcing -> schedule gate evidence;
+    roster -> release/completion evidence), never by arrival timing."""
+    snapshot = layout.outbox_ref(db, workflow_id, subject_event_id).get()
+    record = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+    if not record:
+        return None
+    return record["message"]["envelope"]["schema_version"]
+
+
+def _latest_approved_verdict(
+    db: Any, workflow_id: str, *, subject_schemas: tuple[str, ...]
+) -> dict[str, Any] | None:
+    """Newest approved validation_verdict whose SUBJECT is one of the given
+    schemas (evidence lookup across the workflow outbox)."""
+    best: dict[str, Any] | None = None
+    best_key = ""
+    for snapshot in layout.workflow_ref(db, workflow_id).collection("outbox").stream():
+        record = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+        message = (record or {}).get("message", {})
+        if message.get("envelope", {}).get("schema_version") != "validation_verdict.v2":
+            continue
+        if message["payload"]["verdict"] != "approved":
+            continue
+        subject = _subject_schema(db, workflow_id, message["payload"]["subject_event_id"])
+        if subject not in subject_schemas:
+            continue
+        if record.get("enqueued_at", "") >= best_key:
+            best, best_key = message, record.get("enqueued_at", "")
+    return best
+
+
+def _open_schedule_gate(
+    db: Any,
+    writes: TxnWrites,
+    *,
+    wf_doc: dict[str, Any],
+    workflow_id: str,
+    trace_id: str,
+    verdict_msg: dict[str, Any],
+    sourcing_msg: dict[str, Any],
+) -> None:
+    """VALIDATING -> AWAITING_SCHEDULE_APPROVAL with the HUM-2 decision
+    record composed in the SAME commit (verdict + sourcing ETA evidence)."""
+    verdict = verdict_msg["payload"]
+    report = sourcing_msg["payload"]
+    resume_day = read_clock(db) + int(report["eta_days"])
+    request = build_approval_request(
+        workflow_id=workflow_id,
+        trace_id=trace_id,
+        action_type="schedule_override",
+        subject_event_id=verdict["subject_event_id"],
+        recommended_action=(
+            f"Suspend {wf_doc['equipment_id']} awaiting part {report['part_number']} "
+            f"(ETA {report['eta_days']} days); resume assembly on day {resume_day}."
+        ),
+        source_refs=[
+            f"validation_verdict:{verdict_msg['envelope']['event_id']}",
+            f"sourcing_report:{sourcing_msg['envelope']['event_id']}",
+            f"workflow:{workflow_id}",
+        ],
+        extracted_facts=[
+            f"part {report['part_number']} approved={report['part_approved']} "
+            f"shipment={report['shipment_status']} eta_days={report['eta_days']}",
+            *verdict["reasons"],
+        ],
+        applicable_rules=verdict["rule_refs"],
+        constraints=[
+            f"{RESUME_CONSTRAINT_PREFIX}{resume_day}",
+            "no substitution: Supply cannot approve substitutions or purchases (AGT-2)",
+        ],
+        alternatives_considered=[
+            {
+                "option": "reject the schedule override and return to planning",
+                "rejected_reason": "safety verdict approved the plan; the only "
+                "blocker is the part ETA reported from supply-chain data",
+            }
+        ],
+    )
+    writes.outbox_messages.append(request)
+    writes.transition = {
+        "target": "AWAITING_SCHEDULE_APPROVAL",
+        "agent_identity": ORCHESTRATOR_IDENTITY,
+        "trace_id": trace_id,
+        "reason_code": "VERDICT_APPROVED",
+        "detail": bounded_json_detail({"approval_id": request["payload"]["approval_id"]}),
+    }
+
+
 def make_verdict_handler(db: Any):
     """Handler for validation_verdict.v2: route a Safety verdict to the next
-    spine step and, when the next step is a HUM-1 gate, compose the
-    approval_request.v2 decision record IN THE SAME COMMIT as the transition
-    into the awaiting state (HUM-2 — the human always has the evidence).
+    spine step BY ITS SUBJECT — live push delivery makes arrival order
+    arbitrary, so routing never depends on which message lands first.
 
-    - VALIDATING + approved  -> AWAITING_SCHEDULE_APPROVAL + schedule_override
-      request (resume day = clock + sourcing ETA; no sourcing evidence in the
-      workflow outbox means the override request would be unfounded ->
-      escalation instead).
-    - VALIDATING + vetoed    -> PLANNING (rework, audited with the reasons).
-    - ASSEMBLY_RESUMED + approved -> AWAITING_RELEASE_APPROVAL +
-      equipment_release request.
-    - ASSEMBLY_RESUMED + vetoed   -> BLOCKED_AGENT_FAILURE (human attention).
-    - Any other state: the verdict is stale — audited no-op, never a NACK
-      loop. apply_transition re-validates the edge transactionally, so a
-      state raced between the read here and the commit aborts safely and the
-      redelivery re-reads.
+    - VALIDATING, approved verdict on a PLAN or SOURCING report, sourcing
+      evidence present -> AWAITING_SCHEDULE_APPROVAL + schedule_override
+      request (HUM-2 record in the SAME commit). Sourcing evidence not yet
+      arrived -> audited HOLD (the sourcing-report handler opens the gate
+      when the report lands; whichever arrives LAST opens it).
+    - VALIDATING, vetoed -> PLANNING (rework loop; replans revalidate).
+    - approved verdict on a ROSTER while still pre-resume: recorded no-op —
+      completion evidence is consumed at resume (the due handler re-keys
+      it), because a workflow cannot seek release before its part arrives.
+    - ASSEMBLY_RESUMED, approved verdict on a ROSTER ->
+      AWAITING_RELEASE_APPROVAL + equipment_release request. A plan or
+      sourcing verdict can NEVER open the release gate.
+    - ASSEMBLY_RESUMED, vetoed -> BLOCKED_AGENT_FAILURE (human attention).
+    - anything else: audited stale no-op, never a NACK loop.
     """
 
     def handle(message: dict[str, Any], writes: TxnWrites) -> None:
@@ -526,6 +670,7 @@ def make_verdict_handler(db: Any):
         wf = _get_dict(layout.workflow_ref(db, workflow_id))
         status = (wf or {}).get("status")
         approved = verdict["verdict"] == "approved"
+        subject = _subject_schema(db, workflow_id, verdict["subject_event_id"])
 
         def _audit_only(reason_code: str, note: str) -> None:
             writes.audit_events.append(
@@ -536,67 +681,42 @@ def make_verdict_handler(db: Any):
                     event_kind="escalation",
                     reason_code=reason_code,
                     input_obj=verdict,
-                    output_obj={"note": note, "status": status},
+                    output_obj={"note": note, "status": status, "subject_schema": subject},
                     effective_at=read_clock(db),
                 )
             )
 
-        if status == "VALIDATING" and approved:
+        schedule_subjects = ("maintenance_action_plan.v2", "sourcing_report.v3")
+        if status == "VALIDATING" and approved and subject in schedule_subjects:
             sourcing = _latest_outbox_payload(db, workflow_id, "sourcing_report.v3")
             if sourcing is None:
-                _make_escalation(
-                    db,
-                    writes,
-                    workflow_id=workflow_id,
-                    trace_id=trace_id,
-                    reason_code="NO_SOURCING_EVIDENCE",
-                    payload=verdict,
-                    error="schedule_override request requires a sourcing report ETA",
+                _audit_only(
+                    "VERDICT_HELD_AWAITING_EVIDENCE",
+                    "approved verdict held; the sourcing-report handler opens "
+                    "the gate when the ETA evidence lands",
                 )
                 return
-            report = sourcing["payload"]
-            resume_day = read_clock(db) + int(report["eta_days"])
-            request = build_approval_request(
+            _open_schedule_gate(
+                db,
+                writes,
+                wf_doc=wf,
                 workflow_id=workflow_id,
                 trace_id=trace_id,
-                action_type="schedule_override",
-                subject_event_id=verdict["subject_event_id"],
-                recommended_action=(
-                    f"Suspend {wf['equipment_id']} awaiting part {report['part_number']} "
-                    f"(ETA {report['eta_days']} days); resume assembly on day {resume_day}."
-                ),
-                source_refs=[
-                    f"validation_verdict:{envelope['event_id']}",
-                    f"sourcing_report:{sourcing['envelope']['event_id']}",
-                    f"workflow:{workflow_id}",
-                ],
-                extracted_facts=[
-                    f"part {report['part_number']} approved={report['part_approved']} "
-                    f"shipment={report['shipment_status']} eta_days={report['eta_days']}",
-                    *verdict["reasons"],
-                ],
-                applicable_rules=verdict["rule_refs"],
-                constraints=[
-                    f"{RESUME_CONSTRAINT_PREFIX}{resume_day}",
-                    "no substitution: Supply cannot approve substitutions or purchases (AGT-2)",
-                ],
-                alternatives_considered=[
-                    {
-                        "option": "reject the schedule override and return to planning",
-                        "rejected_reason": "safety verdict approved the plan; the only "
-                        "blocker is the part ETA reported from supply-chain data",
-                    }
-                ],
+                verdict_msg=message,
+                sourcing_msg=sourcing,
             )
-            writes.outbox_messages.append(request)
-            writes.transition = {
-                "target": "AWAITING_SCHEDULE_APPROVAL",
-                "agent_identity": ORCHESTRATOR_IDENTITY,
-                "trace_id": trace_id,
-                "reason_code": "VERDICT_APPROVED",
-                "detail": bounded_json_detail({"approval_id": request["payload"]["approval_id"]}),
-            }
-        elif status == "VALIDATING" and not approved:
+        elif subject == "roster_assignment.v2" and status != "ASSEMBLY_RESUMED":
+            # completion evidence (approved OR vetoed) arriving pre-resume:
+            # recorded via the transactional marker — the committing txn
+            # re-reads the workflow doc and re-keys straight onto the bus if
+            # the resume raced in (lost-wakeup closure). A vetoed roster is
+            # NOT a plan veto: it re-keys at resume and blocks there.
+            _audit_only(
+                "ROSTER_VERDICT_RECORDED",
+                "completion evidence recorded; re-keyed at resume",
+            )
+            writes.completion_evidence = {"message": message}
+        elif status == "VALIDATING" and not approved and subject in schedule_subjects:
             writes.transition = {
                 "target": "PLANNING",
                 "agent_identity": ORCHESTRATOR_IDENTITY,
@@ -604,7 +724,7 @@ def make_verdict_handler(db: Any):
                 "reason_code": "VERDICT_VETOED",
                 "detail": bounded_json_detail({"reasons": verdict["reasons"]}),
             }
-        elif status == "ASSEMBLY_RESUMED" and approved:
+        elif status == "ASSEMBLY_RESUMED" and approved and subject == "roster_assignment.v2":
             request = build_approval_request(
                 workflow_id=workflow_id,
                 trace_id=trace_id,
@@ -637,7 +757,12 @@ def make_verdict_handler(db: Any):
                 "reason_code": "VERDICT_APPROVED",
                 "detail": bounded_json_detail({"approval_id": request["payload"]["approval_id"]}),
             }
-        elif status == "ASSEMBLY_RESUMED":
+        elif status == "ASSEMBLY_RESUMED" and not approved and subject == "roster_assignment.v2":
+            # only vetoed COMPLETION evidence blocks the release path — a
+            # late vetoed plan/sourcing verdict (live delivery timing) is
+            # stale context, not grounds to block (observed live: run 1
+            # blocked on a post-resume sourcing veto that run 2 shrugged off
+            # as stale purely because it arrived earlier)
             _make_escalation(
                 db,
                 writes,
@@ -649,6 +774,38 @@ def make_verdict_handler(db: Any):
             )
         else:
             _audit_only("VERDICT_STALE", "verdict arrived for a workflow not awaiting one")
+
+    return handle
+
+
+def make_sourcing_report_handler(db: Any):
+    """Handler for sourcing_report.v3 at the orchestrator: the report is the
+    schedule gate's ETA EVIDENCE. Live delivery order is arbitrary — if an
+    approved plan/sourcing verdict is already HELD, the report's arrival
+    opens the gate (whichever lands last opens it); otherwise the report
+    simply waits in the outbox for the verdict handler. No-ops are silent:
+    a report is evidence, not a state trigger by itself."""
+
+    def handle(message: dict[str, Any], writes: TxnWrites) -> None:
+        envelope = message["envelope"]
+        workflow_id = envelope["workflow_id"]
+        wf = _get_dict(layout.workflow_ref(db, workflow_id))
+        if (wf or {}).get("status") != "VALIDATING":
+            return
+        held = _latest_approved_verdict(
+            db, workflow_id, subject_schemas=("maintenance_action_plan.v2", "sourcing_report.v3")
+        )
+        if held is None:
+            return
+        _open_schedule_gate(
+            db,
+            writes,
+            wf_doc=wf,
+            workflow_id=workflow_id,
+            trace_id=envelope["trace_id"],
+            verdict_msg=held,
+            sourcing_msg=message,
+        )
 
     return handle
 
@@ -740,5 +897,51 @@ def make_decision_handler(db: Any):
                 }
         else:
             _audit_only("DECISION_STALE", f"{action} decision for workflow in {status}")
+
+    return handle
+
+
+def make_due_handler(db: Any):
+    """Handler for due_event.v2 (Logical Clock, ORC-5): the part's ETA day
+    has arrived — resume assembly. SUSPENDED_AWAITING_PART -> ASSEMBLY_RESUMED
+    is the only edge; a due event for a workflow in any other state (already
+    resumed, blocked, released) is an audited no-op, never a NACK loop. The
+    clock's transactional recheck prevents early emission; this handler's
+    apply_transition re-validates the edge at commit."""
+
+    def handle(message: dict[str, Any], writes: TxnWrites) -> None:
+        envelope = message["envelope"]
+        workflow_id = envelope["workflow_id"]
+        trace_id = envelope["trace_id"]
+        wf = _get_dict(layout.workflow_ref(db, workflow_id))
+        status = (wf or {}).get("status")
+        if status != "SUSPENDED_AWAITING_PART":
+            writes.audit_events.append(
+                build_audit_event(
+                    workflow_id=workflow_id,
+                    trace_id=trace_id,
+                    agent_identity=ORCHESTRATOR_IDENTITY,
+                    event_kind="escalation",
+                    reason_code="DUE_EVENT_STALE",
+                    input_obj=message["payload"],
+                    output_obj={"status": status},
+                    effective_at=read_clock(db),
+                )
+            )
+            return
+        writes.transition = {
+            "target": "ASSEMBLY_RESUMED",
+            "agent_identity": ORCHESTRATOR_IDENTITY,
+            "trace_id": trace_id,
+            "reason_code": "PART_ETA_REACHED",
+            "detail": bounded_json_detail({"due_at_logical": message["payload"]["due_at_logical"]}),
+        }
+        # Completion evidence that arrived pre-resume is re-keyed onto the
+        # bus IN THE COMMITTING TRANSACTION (bus reads the marker doc after
+        # claiming, before any write): whichever of {evidence, resume}
+        # commits second sees the other's durable record, so the release
+        # gate can never lose the wakeup. The epoch (due day) is folded into
+        # the re-key id — replay- and second-suspension-safe.
+        writes.resume_rekey = {"due_at": message["payload"]["due_at_logical"]}
 
     return handle

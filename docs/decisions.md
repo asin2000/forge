@@ -483,3 +483,133 @@ Also noted for accuracy: emulator-verified (PR #3) is not deployment-verified
   land for clock.emit_due_events and the monitor cycle, their trace ids
   must derive from the workflow root trace (today only tests call them,
   correctly) — same second-trace-identifier class as blocker 2.
+
+## 2026-08-21 (build-day 7) — Full spine, OBS, fleet deployment, Lane 2
+
+- Spine completion: PLANNING->VALIDATING on plan arrival (replans
+  REVALIDATE without re-claiming the standing staffing package — the
+  veto->rework loop was a claim-collision DLQ dead end before);
+  due_event.v2 handler (SUSPENDED->ASSEMBLY_RESUMED, stale-safe).
+- Root-trace derivation (Day-6 rider): workflow_state.v2 stores the
+  workflow's root trace_id; the Logical Clock's due events and the ORC-4
+  monitor's timeout events derive their trace from the WORKFLOW doc, never
+  a caller. emit_due_events(db) lost its trace parameter entirely.
+- ORDER-INDEPENDENT gate routing (live push delivery makes arrival order
+  arbitrary — three real races the ordered tests had masked):
+  (1) verdict-before-sourcing-report used to ESCALATE+BLOCK on missing
+  evidence; now the verdict is HELD and whichever of verdict/report lands
+  LAST opens the schedule gate (orchestrator consumes sourcing_report.v3).
+  (2) verdicts route BY SUBJECT (plan/sourcing -> schedule gate; roster ->
+  release gate) — a late plan verdict can never open the release gate.
+  (3) completion evidence arriving pre-resume (roster verdict while
+  suspended) is recorded and RE-KEYED by the due handler at resume in the
+  same commit as the transition. The worker + emulator spine tests now run
+  with IMMEDIATE delivery (live shape) — no scene-timing deferral.
+- Live-run finding (run 1 vs run 2): a deterministic data-engine VETO of
+  the delayed sourcing report blocked run 1 purely because it arrived
+  post-resume (run 2: same veto, earlier arrival, benign stale no-op).
+  Post-resume vetoes now block ONLY on completion (roster) evidence.
+- OBS-1/OBS-2: forge_common/otel.py — W3C traceparent/tracestate in
+  Pub/Sub attributes (authoritative), envelope trace_id a read-only
+  mirror seeding the synthetic parent when no W3C context arrives, ONE
+  metadata-only consume span per delivery (ADK spans nest under it),
+  Cloud Trace exporter gated on FORGE_TRACE_EXPORT=cloud with 100%
+  sampling. CI-3's inject/extract test + OBS-2 attribute-allowlist tests.
+- Worker runtime (services/worker.py): one Cloud Run service per role,
+  filtered ORDERED push subscriptions (OIDC = role SA), delivery
+  semantics 204-ack / 429-claim-retry / 200-terminal-reject-audited /
+  500-DLQ. The full spine runs through the worker push surface in unit
+  AND emulator tests, and LIVE (docs/verification/2026-08-21-day7-live.md).
+- PLT-6 complete: deploy.sh chains setup-gcp.sh and stands up EVERYTHING
+  (SAs, scoped IAM, bus+DLQ, regional log bucket, registry, one image,
+  5 workers + dashboard, push subscriptions). Live production findings
+  encoded: lockfile must carry the trace exporter; Pub/Sub FILTERS CAP AT
+  256 CHARS (routing now stamps to_<role> attributes from the canonical
+  forge_common.pubsub.ROUTING map, CI-9 cross-checks it against registry
+  consumes); dead-lettering needs BOTH service-agent grants (with only
+  DLQ-publisher, exhausted messages redeliver forever); span export needs
+  roles/cloudtrace.agent.
+- AGT-6 narrowed (Day-6 rider): per-topic publisher bindings replace
+  project-wide pubsub.editor (removed live); Firestore's per-collection
+  limitation documented in deploy.sh + README compensating controls.
+- Cloud Logging regionalized (Day-6 rider): forge-logs bucket in
+  us-central1, _Default sink redirected; _Required exception disclosed in
+  the README (DAT-3 section added).
+- DAT-2 closure: data_origin/trust_state now rendered in the dashboard
+  audit trail (they were displayed nowhere — requirement text says SHALL).
+- Traceability flipped to STRICT with a dated pending_allowed list
+  (CI-6 WIF half Day 8, CI-8 Day 9, DFT-4 Day 8, SUB-* Days 9-10);
+  CI-5 Vulture gate added as the EIGHTH CI job (clean).
+- Demo hygiene lessons: failure evidence must outlive cleanup (the live
+  driver dumps the full trail before deleting anything); live pollers use
+  reached-or-passed state semantics (equality deadlocks on a missed
+  intermediate); live cleanup re-seeds agent instance states.
+- Live-run root cause (runs 1 & 3 vs run 2): UNGROUNDED MAINTENANCE PLANS.
+  The live planner invented task codes (e.g. outside TC-101/102/201); no
+  technician holds a qualification for an invented code, so every roster
+  failed its data check, the primary AND reserve exhausted (AGT-7), and
+  ORC-3 blocked with RESERVE_UNAVAILABLE — guardrails all behaved exactly
+  as specified; the defect was the planner's freedom to schedule
+  unexecutable work. Fix in the same data-backed pattern as Supply and
+  Workforce: prompts/maintenance_action_plan.v2.md carries the STAFFABLE
+  task catalog (derived from qualifications.yaml), the maintenance
+  payload_check rejects off-catalog codes at the source (AGT-7 retry sees
+  the catalog), and safety's plan engine independently vetoes unstaffable
+  plans (SP-QUAL-001) — belt and suspenders, both regression-tested.
+  **Pattern (now three times proven): every fact a model asserts must have
+  a registry it is checked against — parts, qualifications, and now the
+  work breakdown itself.**
+
+- Pre-push adversarial verification (5 reviewers over Day 7) — all real
+  findings fixed same-day: (1) OBS-2/DAT-3: google-adk captures FULL
+  prompts+responses into span attributes BY DEFAULT — forced off at otel
+  import and in every service env, leak-tested with sentinels; (2) the
+  SDK's auto status wrote str(exc) — which can embed payload text — into
+  exported status.description: statuses now carry the exception TYPE only;
+  (3) a present-but-garbage traceparent orphaned the hop silently: mirror
+  fallback + explicit flag; (4) a vetoed ROSTER verdict pre-resume
+  misrouted as a plan veto (or vanished): completion evidence (approved OR
+  vetoed) now records via a transactional marker and re-keys at resume,
+  blocking there if vetoed; (5) lost-wakeup race between the roster
+  verdict and the resume: BOTH sides now act in their committing
+  transactions (the verdict commit re-reads the workflow doc; the due
+  commit reads the marker) — whichever commits second sees the other;
+  (6) the re-key id now folds the resume epoch (second suspensions no
+  longer AlreadyExists-crash-loop); (7) input-boundary contract rejections
+  (audited) ack, but OUTPUT-side violations now 500 to the DLQ — never
+  silent loss; (8) push subscriptions carry a retry policy (60s-600s) so
+  redelivery credit outlives the 120s claim lease; (9) ordered-publish
+  failures resume the paused ordering key; (10) /tick heartbeat (Cloud
+  Scheduler, every minute) runs the ORC-4 monitor, ORC-5 due emission, and
+  an outbox sweep — the monitor and clock now RUN as deployed, and
+  dashboard decisions always drain; (11) deploy.sh grants the dead-letter
+  subscriber half AFTER the subscriptions exist (clean-project ordering),
+  setup provisions the Pub/Sub service agent + compute/scheduler APIs;
+  (12) REG-5's missing lifecycle audits implemented (definition-change
+  audits on load, IDLE->ACTIVE activation audited in the claim txn);
+  (13) README/verification-doc honesty sweep (us multi-region for Gemini,
+  real deploy command + prerequisites, Firestore compensating controls,
+  PLT-6 clean-project claim softened and kept pending until the Day-8
+  fresh-project run). Silent-swallow of a replan racing its veto is now
+  AUDITED (PLAN_REVISION_HELD); automating replans requires an in-band
+  re-trigger first.
+
+## 2026-08-22 (freeze acceptance) — 10x run caught an ungrounded-parts stall
+
+The first 10-consecutive live acceptance run failed at run 9 (8/10 had
+passed): the live gemini planner produced part numbers not approved for
+DSC-0042 (ACTUATOR-HYD-GX12, HYD-FLUID-H15); Safety CORRECTLY vetoed
+(SP-PART-001), the workflow returned to PLANNING, and — with no automated
+replan producer — the spine stalled. Root cause: Maintenance was grounded
+in the staffable-task catalog (Day-7 fix) but NOT in the approved-parts
+registry, unlike Supply. Fix (same pattern, now complete): the maintenance
+prompt (v3) carries the approved parts for THIS discrepancy, and the
+payload_check runs plan_violations at source so a straying model retries
+(AGT-7) against the approved list instead of shipping a plan doomed to a
+downstream veto. The veto path itself remains correct and tested — this
+just stops the happy path from depending on the model guessing an approved
+part. **Third instance of the invariant: every fact a model asserts —
+parts, qualifications, task codes — must be checked against a registry, and
+the registry belongs IN THE PROMPT, not just in the downstream validator.**
+The acceptance run did exactly its job: 8 lucky runs hid a reliability gap
+that the 9th exposed. Candidate advances; the 10x restarts from zero.

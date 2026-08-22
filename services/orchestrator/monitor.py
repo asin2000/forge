@@ -20,7 +20,11 @@ from typing import Any
 from forge_common import layout
 from forge_common.audit import now_iso
 from forge_common.contracts import validate_message
-from forge_common.messages import build_envelope, deterministic_event_id
+from forge_common.messages import (
+    build_envelope,
+    deterministic_event_id,
+    deterministic_trace_id,
+)
 
 MONITORING_CYCLE_SECONDS = 5  # demo environment (spec §2)
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -63,14 +67,16 @@ def build_timeout_event(
 def run_monitoring_cycle(
     db: Any,
     *,
-    trace_id_for: Any,
+    trace_id_for: Any = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     now: str | None = None,
 ) -> list[str]:
     """One ORC-4 cycle. Returns work_package_ids newly flagged as timed out.
 
-    ``trace_id_for(workflow_id)`` supplies the workflow trace;
-    ``now`` is injectable for tests (ISO-8601, as ``audit.now_iso``).
+    Timeout events ride the WORKFLOW's root trace (state doc trace_id,
+    OBS-1) by default — this unattended producer never mints its own.
+    ``trace_id_for(workflow_id)`` remains injectable for tests; ``now`` is
+    injectable for tests (ISO-8601, as ``audit.now_iso``).
     """
     current = now or now_iso()
     cutoff = (
@@ -93,9 +99,14 @@ def run_monitoring_cycle(
             reference = wp.get("reassigned_observed_at") or wp.get("assigned_observed_at", "")
             if reference > cutoff:
                 continue
+            trace = (
+                trace_id_for(workflow_id)
+                if trace_id_for is not None
+                else workflow.get("trace_id") or deterministic_trace_id(workflow_id)
+            )
             message = build_timeout_event(
                 workflow_id=workflow_id,
-                trace_id=trace_id_for(workflow_id),
+                trace_id=trace,
                 work_package_id=wp["work_package_id"],
                 role=wp["role"],
                 agent_id=wp["owner_instance_id"],

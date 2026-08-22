@@ -273,6 +273,7 @@ def create_workflow(
                 "logical_time": logical_time,
                 "due_at": None,
                 "equipment_id": equipment_id,
+                "trace_id": trace_id,
                 "updated_observed_at": now_iso(),
             }
         )

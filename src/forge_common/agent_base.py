@@ -20,6 +20,7 @@ claim/lease — never inside a transaction callback.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -74,15 +75,25 @@ class AdkTextRunner:
     def __call__(self, prompt: str) -> str:
         user_id = f"u-{uuid.uuid4().hex[:8]}"
         session = self._sessions.create_session_sync(app_name=_APP_NAME, user_id=user_id)
-        final = ""
-        for event in self._runner.run(
-            user_id=user_id,
-            session_id=session.id,
-            new_message=types.Content(role="user", parts=[types.Part(text=prompt)]),
-        ):
-            if event.is_final_response() and event.content and event.content.parts:
-                final = "".join(part.text or "" for part in event.content.parts)
-        return final
+
+        async def _drain() -> str:
+            # OBS-1: drive ADK's async API IN THIS THREAD — asyncio.run
+            # copies the current contextvars, so ADK's own invocation /
+            # call_llm spans parent under the active bus consume span and
+            # the whole workflow stays ONE trace. (Runner.run's sync wrapper
+            # hops to an internal thread and orphans the spans — observed
+            # live: 7 model-call traces beside the workflow trace.)
+            final = ""
+            async for event in self._runner.run_async(
+                user_id=user_id,
+                session_id=session.id,
+                new_message=types.Content(role="user", parts=[types.Part(text=prompt)]),
+            ):
+                if event.is_final_response() and event.content and event.content.parts:
+                    final = "".join(part.text or "" for part in event.content.parts)
+            return final
+
+        return asyncio.run(_drain())
 
 
 class AgentOutputMalformed(Exception):

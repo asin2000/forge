@@ -246,8 +246,8 @@ def test_clock_double_fire_single_due_event():
     )
     new_time = advance_clock(db, 21)
     assert new_time == 21
-    first = emit_due_events(db, trace_id=TRACE)
-    second = emit_due_events(db, trace_id=TRACE)
+    first = emit_due_events(db)
+    second = emit_due_events(db)
     assert first == [WF] and second == []
     outbox = list(db.collection("workflows").document(WF).collection("outbox").stream())
     assert len(outbox) == 1
@@ -358,7 +358,7 @@ def test_post_skip_events_carry_advanced_effective_at():
     make_workflow(db)
     suspend(db, due_at=21)
     assert advance_clock(db, 21) == 21
-    emit_due_events(db, trace_id=TRACE)
+    emit_due_events(db)
     advance_to(db, ["ASSEMBLY_RESUMED", "AWAITING_RELEASE_APPROVAL"])
     doc = state.transition_workflow(
         db,
@@ -651,7 +651,7 @@ def test_due_events_recheck_state_transactionally():
     advance_clock(db, 5)
     # Legitimate resume before the emitter runs: due event no longer valid.
     advance_to(db, ["ASSEMBLY_RESUMED"])
-    assert emit_due_events(db, trace_id=TRACE) == []
+    assert emit_due_events(db) == []
 
 
 def test_concurrent_delivery_single_handler_execution():

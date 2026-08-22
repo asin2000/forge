@@ -23,12 +23,16 @@ from typing import Any
 import yaml
 
 from forge_common import layout
-from forge_common.audit import now_iso
+from forge_common.audit import build_audit_event, now_iso
+from forge_common.messages import deterministic_event_id, deterministic_trace_id, sha256_hex
 
 REGISTRY_YAML = Path(__file__).resolve().parents[2] / "agents" / "registry.yaml"
 
 DEFINITION_STATES = ("DRAFT", "APPROVED", "DEPRECATED", "RETIRED")
 INSTANCE_STATES = ("IDLE", "RESERVE", "ACTIVE", "FAILED")
+
+
+REGISTRY_AUDIT_WORKFLOW = "wf-system-registry"
 
 
 class NoCapableAgent(Exception):
@@ -70,8 +74,36 @@ def load_registry(db: Any, yaml_path: Path = REGISTRY_YAML) -> list[str]:
     loaded: list[str] = []
     for definition in doc["agents"]:
         agent_id = definition["agent_id"]
+        previous_snapshot = definition_ref(db, agent_id).get()
+        previous = (
+            previous_snapshot.to_dict()
+            if hasattr(previous_snapshot, "to_dict")
+            else previous_snapshot
+        ) or {}
+        changed = {k: v for k, v in definition.items() if previous.get(k) != v}
         definition_ref(db, agent_id).set({**definition, "loaded_observed_at": now_iso()})
         loaded.append(agent_id)
+        if changed:
+            # REG-5: definition lifecycle changes emit AUD-1 events, under
+            # the registry system workflow. Deterministic id (content-keyed)
+            # -> idempotent redeploys audit once per actual change.
+            audit = build_audit_event(
+                workflow_id=REGISTRY_AUDIT_WORKFLOW,
+                trace_id=deterministic_trace_id(REGISTRY_AUDIT_WORKFLOW),
+                agent_identity="forge-deployer",
+                event_kind="state_change",
+                reason_code=(
+                    "REGISTRY_DEFINITION_LOADED" if not previous else "REGISTRY_DEFINITION_UPDATED"
+                ),
+                input_obj={"agent_id": agent_id, "changed_fields": sorted(changed)},
+                output_obj={"version": definition.get("version")},
+                effective_at=0,
+                event_id=deterministic_event_id("registry-def", agent_id, sha256_hex(definition)),
+            )
+            audit_doc = layout.audit_ref(db, REGISTRY_AUDIT_WORKFLOW, audit["envelope"]["event_id"])
+            existing = audit_doc.get()
+            if not (existing.to_dict() if hasattr(existing, "to_dict") else existing):
+                audit_doc.set(audit)
         seeds = [(1, "IDLE")]
         if agent_id == "forge-workforce":
             seeds.append((2, "RESERVE"))
@@ -159,6 +191,7 @@ def claim_work_package(
     role: str,
     objective: str = "",
     inputs: dict[str, Any] | None = None,
+    trace_id: str | None = None,
 ) -> None:
     """Create the exclusive-ownership record for a work package (ORC-1).
 
@@ -180,6 +213,20 @@ def claim_work_package(
             "assigned_observed_at": now_iso(),
         },
     )
+    if trace_id is not None:
+        # REG-5: the instance state transition (-> ACTIVE) is audited in the
+        # SAME transaction as the exclusive claim that causes it.
+        audit = build_audit_event(
+            workflow_id=workflow_id,
+            trace_id=trace_id,
+            agent_identity="forge-orchestrator",
+            event_kind="state_change",
+            reason_code="AGENT_ACTIVATED",
+            input_obj={"instance_id": instance_id, "work_package_id": work_package_id},
+            output_obj={"state": "ACTIVE"},
+            effective_at=0,
+        )
+        txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
     txn.set(
         instance_ref(db, instance_id),
         {"state": "ACTIVE", "state_changed_observed_at": now_iso()},
