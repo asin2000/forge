@@ -1,0 +1,9 @@
+{
+  "workflow_id": "wf-gx12-07-hyd-001",
+  "status": "AWAITING_RELEASE_APPROVAL",
+  "logical_time": 10,
+  "due_at": null,
+  "equipment_id": "GX12-07",
+  "updated_observed_at": "2026-08-21T16:00:00Z",
+  "trace_id": "c0ffee00c0ffee00c0ffee00c0ffee00"
+}
