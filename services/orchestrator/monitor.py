@@ -179,7 +179,9 @@ def _oidc_probe(endpoint: str) -> bool:  # pragma: no cover - live network path
     token = google.oauth2.id_token.fetch_id_token(
         google.auth.transport.requests.Request(), endpoint
     )
-    request = urllib.request.Request(f"{endpoint}/healthz")
+    # /health, not /healthz: the Google front end intercepts /healthz on
+    # *.run.app and returns its own 404 before the container is reached.
+    request = urllib.request.Request(f"{endpoint}/health")
     request.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(request, timeout=10) as response:
         return response.status == 200
