@@ -178,7 +178,10 @@ def create_worker(
             no further bus traffic (verify-pass finding: without a sweeper,
             a failed post-commit drain parked the workflow forever)."""
             from forge_common.clock import emit_due_events
-            from services.orchestrator.monitor import run_monitoring_cycle
+            from services.orchestrator.monitor import (
+                probe_fleet_health,
+                run_monitoring_cycle,
+            )
 
             flagged = run_monitoring_cycle(db)
             due = emit_due_events(db)
@@ -187,7 +190,13 @@ def create_worker(
                 for snapshot in db.collection("workflows").stream():
                     doc = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
                     swept += drain_outbox(db, doc["workflow_id"], publish)
-            return {"timed_out": flagged, "due_emitted": due, "outbox_published": swept}
+            health = probe_fleet_health(db)  # REG-1: authenticated fleet probe
+            return {
+                "timed_out": flagged,
+                "due_emitted": due,
+                "outbox_published": swept,
+                "health": health,
+            }
 
     @app.post("/")
     def push(body: dict[str, Any]) -> Response:

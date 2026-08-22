@@ -394,3 +394,63 @@ def test_cyber_trust_ingest_surface_quarantines_screens_and_drains():
     )
     assert conflict.status_code == 409
     assert client.post("/ingest", json={"workflow_id": WF}).status_code == 400
+
+
+def test_reg1_fleet_probe_stamps_heartbeats_and_health_derives():
+    """REG-1 verify criterion: staleness derivation including the
+    scaled-to-zero UNKNOWN case. The Orchestrator's authenticated probe
+    stamps last_heartbeat_at on success; health stays DERIVED — probed
+    services read HEALTHY, a service that stops answering decays to STALE,
+    a never-probed / endpointless definition stays UNKNOWN, and nothing
+    ever writes a health flag."""
+    from services.dashboard.app import create_app, derive_health
+    from services.orchestrator.monitor import probe_fleet_health
+
+    db = FakeFirestore()
+    registry.load_registry(db)
+    # give every definition an endpoint except cyber-trust (scaled-to-zero,
+    # never invoked -> must stay UNKNOWN)
+    for snapshot in db.collection("agent_registry").stream():
+        d = snapshot.to_dict()
+        endpoint = (
+            None
+            if d["agent_id"] == "forge-cyber-trust"
+            else f"https://{d['agent_id']}.example.run.app"
+        )
+        db.collection("agent_registry").document(d["agent_id"]).set({**d, "endpoint": endpoint})
+
+    down = {"forge-safety"}  # this service will not answer its probe
+    probed_endpoints = []
+
+    def prober(endpoint):
+        probed_endpoints.append(endpoint)
+        return not any(agent in endpoint for agent in down)
+
+    result = probe_fleet_health(db, prober=prober)
+    assert result["probed"] == 5  # six definitions, one endpointless
+    assert result["stamped"] >= 4
+
+    client = TestClient(create_app(db, verifier=lambda t: "x"))
+    catalog = {d["agent_id"]: d for d in client.get("/api/catalog").json()}
+    assert all(i["health"] == "HEALTHY" for i in catalog["forge-workforce"]["instances"]), (
+        "probed definitions derive HEALTHY (both instances stamped)"
+    )
+    assert catalog["forge-cyber-trust"]["instances"][0]["health"] == "UNKNOWN", (
+        "scaled-to-zero, never probed -> UNKNOWN, never fabricated HEALTHY"
+    )
+    assert catalog["forge-safety"]["instances"][0]["health"] == "UNKNOWN", (
+        "failed probe stamps nothing: stays UNKNOWN until first success"
+    )
+    # decay: a stamp older than three deployed-cadence beats reads STALE
+    assert (
+        derive_health("2026-08-22T00:00:00.000000Z", now="2026-08-22T00:02:00.000000Z") == "HEALTHY"
+    )
+    assert (
+        derive_health("2026-08-22T00:00:00.000000Z", now="2026-08-22T00:03:30.000000Z") == "STALE"
+    )
+
+    # probe failures never crash the tick
+    def exploding(endpoint):
+        raise RuntimeError("connection refused")
+
+    assert probe_fleet_health(db, prober=exploding)["stamped"] == 0

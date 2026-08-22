@@ -20,6 +20,7 @@ Surfaces:
 from __future__ import annotations
 
 import datetime
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -31,8 +32,11 @@ from forge_common.messages import build_envelope, deterministic_event_id
 from services.dashboard import auth
 from services.dashboard.ui import PAGE_HTML
 
-MONITORING_CYCLE_SECONDS = 5
-STALE_AFTER_SECONDS = 3 * MONITORING_CYCLE_SECONDS
+# REG-1: health derives from heartbeat staleness at the DEPLOYED probe
+# cadence (Cloud Scheduler's per-minute tick); three missed beats = STALE.
+# The 5s monitoring cycle governs ORC-4 timeout detection, not heartbeats.
+HEARTBEAT_CADENCE_SECONDS = int(os.environ.get("HEARTBEAT_CADENCE_SECONDS", "60"))
+STALE_AFTER_SECONDS = 3 * HEARTBEAT_CADENCE_SECONDS
 
 
 def _docs(collection: Any) -> list[dict[str, Any]]:
