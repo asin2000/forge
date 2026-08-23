@@ -25,6 +25,7 @@ from forge_common.messages import (
     deterministic_event_id,
     deterministic_trace_id,
 )
+from forge_common.state import TERMINAL_STATES
 
 MONITORING_CYCLE_SECONDS = 5  # demo environment (spec §2)
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -91,6 +92,10 @@ def run_monitoring_cycle(
     for wf_snapshot in db.collection("workflows").stream():
         workflow = wf_snapshot.to_dict() if hasattr(wf_snapshot, "to_dict") else wf_snapshot
         workflow_id = workflow["workflow_id"]
+        if workflow.get("status") in TERMINAL_STATES:
+            # Cancelled/released workflows produce no timeout events (HUM-3):
+            # a lingering ASSIGNED package on a finished workflow is inert.
+            continue
         packages = layout.workflow_ref(db, workflow_id).collection("work_packages")
         for snapshot in packages.stream():
             wp = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot

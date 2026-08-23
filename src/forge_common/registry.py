@@ -23,7 +23,7 @@ from typing import Any
 import yaml
 
 from forge_common import layout
-from forge_common.audit import build_audit_event, now_iso
+from forge_common.audit import bounded_json_detail, build_audit_event, now_iso
 from forge_common.messages import deterministic_event_id, deterministic_trace_id, sha256_hex
 
 REGISTRY_YAML = Path(__file__).resolve().parents[2] / "agents" / "registry.yaml"
@@ -42,6 +42,11 @@ class NoCapableAgent(Exception):
 class IneligibleAssignment(Exception):
     """REG-2: assignment refused at claim time — the definition is no longer
     APPROVED or the instance is not assignable. Rejected and audited."""
+
+
+class InvalidInstanceTransition(Exception):
+    """HUM-3: an operator instance-state induction the rules refuse — the
+    instance is unknown, already FAILED, or not FAILED when restoring."""
 
 
 def definition_ref(db: Any, agent_id: str) -> Any:
@@ -122,6 +127,71 @@ def load_registry(db: Any, yaml_path: Path = REGISTRY_YAML) -> list[str]:
                     }
                 )
     return loaded
+
+
+def operator_set_instance_state(
+    db: Any, *, instance_id: str, action: str, operator: str, target_state: str | None = None
+) -> dict[str, Any]:
+    """HUM-3 anomaly control: audited operator instance-state induction.
+
+    ``fail`` marks a non-FAILED instance FAILED (the injected anomaly the
+    demo narrates: discovery then skips it and dependent work escalates)
+    and remembers the pre-failure state; ``restore`` returns a FAILED
+    instance to that remembered state (RESERVE stays a reserve — the ORC-3
+    topology survives a fail/restore round trip), or to an explicit
+    ``target_state`` of IDLE/RESERVE. Both are REG-5 instance transitions:
+    the state write and its AUD-1 event commit in one transaction under the
+    registry system workflow, with the authenticated operator recorded
+    verbatim. This never fabricates an agent_failure_event — failure
+    detection stays with its real producers.
+    """
+    if action not in ("fail", "restore"):
+        raise InvalidInstanceTransition(f"unknown instance action {action!r}")
+    if target_state is not None and target_state not in ("IDLE", "RESERVE"):
+        raise InvalidInstanceTransition(
+            f"restore target must be IDLE or RESERVE, not {target_state}"
+        )
+
+    def _apply(txn: Any) -> dict[str, Any]:
+        instance = layout.txn_get_dict(txn, instance_ref(db, instance_id))
+        if not instance:
+            raise InvalidInstanceTransition(f"unknown instance {instance_id}")
+        source = instance.get("state")
+        if action == "fail":
+            if source == "FAILED":
+                raise InvalidInstanceTransition(f"{instance_id} is already FAILED")
+            target = "FAILED"
+        else:
+            if source != "FAILED":
+                raise InvalidInstanceTransition(f"{instance_id} is {source}, not FAILED")
+            remembered = instance.get("failed_from_state")
+            target = target_state or (remembered if remembered in ("IDLE", "RESERVE") else "IDLE")
+        clock_doc = layout.txn_get_dict(txn, layout.clock_ref(db))
+        audit = build_audit_event(
+            workflow_id=REGISTRY_AUDIT_WORKFLOW,
+            trace_id=deterministic_trace_id(REGISTRY_AUDIT_WORKFLOW),
+            agent_identity="forge-approval-surface",
+            event_kind="state_change",
+            reason_code=(
+                "OPERATOR_INSTANCE_FAILED" if action == "fail" else "OPERATOR_INSTANCE_RESTORED"
+            ),
+            input_obj={"instance_id": instance_id, "from_state": source},
+            output_obj={"state": target},
+            effective_at=int(clock_doc["logical_time"]) if clock_doc else 0,
+            detail=bounded_json_detail({"operator": operator}),
+        )
+        updated = {**instance, "state": target, "state_changed_observed_at": now_iso()}
+        if action == "fail":
+            updated["failed_from_state"] = source
+        else:
+            updated.pop("failed_from_state", None)
+        txn.set(instance_ref(db, instance_id), updated)
+        txn.create(
+            layout.audit_ref(db, REGISTRY_AUDIT_WORKFLOW, audit["envelope"]["event_id"]), audit
+        )
+        return {"instance_id": instance_id, "from_state": source, "state": target}
+
+    return layout.run_in_transaction(db, _apply)
 
 
 def discover(db: Any, capability: str) -> dict[str, Any]:

@@ -38,12 +38,19 @@ def read_clock(db: Any) -> int:
 CLOCK_AUDIT_WORKFLOW = "wf-system-clock"
 
 
-def advance_clock(db: Any, days: int, *, agent_identity: str = "forge-orchestrator") -> int:
+def advance_clock(
+    db: Any,
+    days: int,
+    *,
+    agent_identity: str = "forge-orchestrator",
+    detail: str | None = None,
+) -> int:
     """Advance simulated time by ``days``; returns the new logical_time.
 
     The advance itself is audited (AUD-1) under ``wf-system-clock`` in the
     same transaction as the clock write, so the jump is reconstructable from
-    Firestore alone (AUD-2/AUD-3).
+    Firestore alone (AUD-2/AUD-3). ``detail`` lets the HUM-3 operator
+    surface record the authenticated principal behind a console advance.
     """
     if days <= 0:
         raise ValueError("clock only advances")
@@ -61,6 +68,7 @@ def advance_clock(db: Any, days: int, *, agent_identity: str = "forge-orchestrat
             input_obj={"from": old_time, "days": days},
             output_obj={"to": new_time},
             effective_at=new_time,
+            detail=detail,
         )
         txn.set(layout.clock_ref(db), {"logical_time": new_time})
         txn.create(

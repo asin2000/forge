@@ -613,3 +613,79 @@ parts, qualifications, task codes — must be checked against a registry, and
 the registry belongs IN THE PROMPT, not just in the downstream validator.**
 The acceptance run did exactly its job: 8 lucky runs hid a reliability gap
 that the 9th exposed. Candidate advances; the 10x restarts from zero.
+
+## Day 9 — the v1.3 operator-console amendment (HUM-3)
+
+**Entrant directive (2026-08-23):** "I should have the ability to start/stop
+workflows and insert anomalies. How will the judges know it actually works."
+That is a judge-verifiability requirement, and it collides head-on with two
+standing rules: §10's "read-only except approve/reject" and the DFT-4
+freeze. Resolution per the entrant's own precedent (the REG-1 heartbeat
+"specification defect" ruling): amend the specification (v1.3, HUM-3 added,
+§10 reworded), implement, re-tag, and rerun the full CI-8 acceptance before
+recording. The freeze is not silently broken — the amendment is the audit
+trail.
+
+**Design decisions, and the roads not taken:**
+
+- **Start = the real trigger, atomically.** The console injects a genuine
+  `nmc_event.v2` (same contract, same routing); `state.create_workflow`
+  gained `outbox_messages` so the state doc, the operator-attributed
+  WORKFLOW_CREATED audit, and the trigger's outbox copy commit in ONE
+  transaction (AUD-2). A workflow can never exist without its trigger
+  durably queued; the post-commit drain (or /tick sweep) publishes it.
+- **Cancel = a real terminal state, not a soft flag.** `CANCELLED` required
+  workflow_state.v3 (ICD-3 forbids editing v2 in place), a `CANCELLED: set()`
+  row plus an edge from every non-terminal state, and — the load-bearing
+  part — TERMINAL_STATES guards in the nmc/plan/verdict/failure handlers and
+  the monitor. Mapping the code first paid off: nmc and failure events for a
+  RELEASED workflow already 500'd into the DLQ (empirically confirmed,
+  5 model calls burned per poison message). The guards close that
+  pre-existing gap for RELEASED and CANCELLED alike: late traffic drains as
+  audited stale no-ops (NMC_EVENT_STALE / PLAN_STALE / VERDICT_STALE), and
+  the nmc guard runs BEFORE the Gemini call.
+- **No fabricated failure events.** `failure_kind` is a closed enum
+  (timeout | malformed_after_retries | contract_violation). An operator
+  "fail" that synthesized a `timeout` event would be mislabeled evidence,
+  and a v3 contract migration of the failure/reassignment machinery days
+  before the deadline is risk without demo value: mid-flight failover has a
+  seconds-wide window regardless (specialists finish fast). So instance
+  fail/restore is exactly what it claims: an audited REG-5 registry
+  transition (OPERATOR_INSTANCE_FAILED/RESTORED under wf-system-registry,
+  operator identity in the detail). The honest on-camera story it enables:
+  fail the technician pool → start → audited NO_CAPABLE_AGENT block →
+  cancel → restore → start → full spine.
+- **Clock advance from the console** — without it a console-started workflow
+  parks at SUSPENDED_AWAITING_PART forever; `advance_clock` gained a
+  `detail` param so the CLOCK_ADVANCED audit names the operator.
+- **Live Agent Activity feed** — entrant's suggestion during the build:
+  pure read-side projection of the AUD-2 trail (workflows + system audit
+  workflows), newest first, DAT-2 labels intact. No new data recorded.
+- **Bulletin relay stays metadata-only** (SEC-4 at this surface too): the
+  dashboard OIDC-calls the deployed cyber-trust /ingest (new run.invoker
+  grant, the only IAM widening) and returns doc_id + verdict_published;
+  upstream bodies and the document text never transit back.
+- **HUM-3 mirrors HUM-1 at the route layer**: principal first, identity
+  fields in the body rejected with 400, every action audited with the
+  authenticated operator.
+
+**Also fixed in passing:** `test_monitor_derives_trace_from_workflow_doc`
+injected `now="2026-08-23"` as the monitor cutoff base — a date the wall
+clock reached today, making real assignment timestamps newer than the
+cutoff. Time-dependent test constants are a defect class; the injected now
+is 2100-01-01.
+
+**Adversarial review of the branch (pre-PR), 11 confirmed findings, all
+closed:** specialists and Safety had NO terminal guard — both now take the
+audited stale no-op (ASSIGNMENT_STALE / VALIDATION_STALE) before their
+model calls; POST /decide now 409s on a finished workflow and the detail
+view renders leftover approval requests as history, not live cards; the
+bulletin's operator-attribution audit moved BEFORE the relay with a
+deterministic event id (a failed forward can no longer lose the principal);
+instance restore returns the instance to its REMEMBERED pre-failure state
+(a fail/restore round trip no longer silently converts the ORC-3 RESERVE
+into an assignable primary — `failed_from_state` is persisted on fail and
+cleared on restore); HUM-3's drain wording now names exactly which stale
+paths audit and which consume silently; stale doc lines fixed (layout
+docstring, SUBMISSION closing line — which also still listed the Google
+credits item the entrant ordered closed; removed).
