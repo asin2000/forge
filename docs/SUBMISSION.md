@@ -11,9 +11,8 @@ this in sync with `README.md`; the README is authoritative for setup.
 - **Repository:** https://github.com/asin2000/forge (private — **must be
   shared** with `testing@devpost.com` and `cloudhackathons@google.com` before
   SUB-7; see Open items — grant collaborator access on GitHub and confirm)
-- **Frozen artifact:** git tag `v1.3-demo` (advances from `v1.2-demo.3`
-  when the v1.3 operator-console re-acceptance completes; see README
-  Acceptance & evidence)
+- **Frozen artifact:** git tag `v1.3-demo` (commit `7e19d47`; 10/10 live
+  acceptance + rehearsals in `docs/verification/2026-08-23-v13-acceptance.md`)
 - **Hosted URL:** the operator console (read-only except the audited HUM-1
   approvals and HUM-3 operator controls) runs on Cloud Run behind IAM
   (`--no-allow-unauthenticated`), so it is not publicly reachable by
@@ -151,7 +150,6 @@ flagged each as unverifiable from the repo. None is an engineering blocker.
       government-agency employment and no real/apparent conflict of interest
       (Official Rules §3) — pertinent given the fictional defense-adjacent
       scenario.
-Engineering-side evidence lives in `docs/verification/` (baseline frozen at
-`v1.2-demo.3`; the v1.3 operator-console re-acceptance advances the tag to
-`v1.3-demo` when its 10/10 completes); the above are submission-portal and
-account actions only.
+Engineering-side evidence lives in `docs/verification/` (frozen at
+`v1.3-demo`, 10/10 live acceptance re-run after the operator-console
+amendment); the above are submission-portal and account actions only.

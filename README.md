@@ -122,23 +122,30 @@ data is synthetic (SUB-5).
 
 ## Acceptance & evidence
 
-Baseline evidence was frozen at tag **`v1.2-demo`** (DFT-4; final patch
-`v1.2-demo.3`). The v1.3 operator-console amendment (HUM-3) re-runs the full
-live acceptance before recording; the tag advances to **`v1.3-demo`** when
-its 10/10 completes. CI enforces eight gates on every PR (lint,
-contracts+ICD-3, unit, real-emulator integration, secrets, dead-code,
-config/registry+residency, traceability); the suite is **287 tests (266 unit
-+ 21 real-client emulator)** and traceability runs in strict mode.
+Frozen at tag **`v1.3-demo`** (DFT-4; commit `7e19d47`). The v1.3
+operator-console amendment (HUM-3) reset the acceptance count per the
+entrant's rule, and the full live acceptance re-ran on the new tag
+(baseline history: `v1.2-demo` … `v1.2-demo.3`). CI enforces eight gates on
+every PR (lint, contracts+ICD-3, unit, real-emulator integration, secrets,
+dead-code, config/registry+residency, traceability); the suite is **287
+tests (266 unit + 21 real-client emulator)** and traceability runs in
+strict mode.
 
 Live acceptance on the frozen commit, verbatim captures in
 `docs/verification/`:
 
-- **CI-8 — 10/10 consecutive** live spines, NMC → RELEASED, real
-  `gemini-3.5-flash` reasoning with two human-gated approvals each
-  (`scripts/acceptance_run.sh`; record in
-  `docs/verification/2026-08-22-acceptance.md`).
-- **Dress rehearsal** (Scene 1 veto + full spine) in 68 s, under the
+- **CI-8 — 10/10 consecutive** live spines on `v1.3-demo`, NMC → RELEASED,
+  real `gemini-3.5-flash` reasoning with two human-gated approvals each,
+  first attempt, zero resets (`scripts/acceptance_run.sh`; record in
+  `docs/verification/2026-08-23-v13-acceptance.md`; the `v1.2-demo` series
+  record remains at `docs/verification/2026-08-22-acceptance.md`).
+- **Dress rehearsal** (Scene 1 veto + full spine) in 69 s, under the
   four-minute budget (same record).
+- **HUM-3 console rehearsal** on the deployed fleet: start → bulletin
+  injection → both approvals → 21-day clock advance → RELEASED, plus
+  cancel (terminal, inert under a live tick) and instance fail/restore
+  (reserve topology preserved) — every action recorded with the
+  authenticated operator identity (same record).
 - **Clean-project deploy**: `deploy.sh` stood up the whole environment on a
   fresh billed project (then deleted) — the PLT-6 criterion
   (`2026-08-21-day7-live.md` §9).
