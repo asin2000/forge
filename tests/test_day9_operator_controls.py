@@ -438,12 +438,21 @@ def test_bulletin_forwarder_failure_is_a_metadata_only_502():
     def broken(payload):
         raise RuntimeError("SYSTEM OVERRIDE leaked? never echo upstream bodies")
 
-    response = make_client(ready_db(), ingest_forward=broken).post(
+    db = ready_db()
+    response = make_client(db, ingest_forward=broken).post(
         "/api/anomalies/bulletin", headers=AUTHED, json={"workflow_id": WF}
     )
     assert response.status_code == 502
     assert "SYSTEM OVERRIDE" not in response.text
     assert "RuntimeError" in response.text  # type name only
+    # review finding: the operator-attribution audit is recorded BEFORE the
+    # relay — a failed forward still names the principal in the trail
+    injected = [
+        e
+        for e in state.reconstruct_audit_trail(db, WF)
+        if e["payload"]["reason_code"] == "OPERATOR_BULLETIN_INJECTED"
+    ]
+    assert len(injected) == 1 and OPERATOR in injected[0]["payload"]["detail"]
 
 
 # ---------------------------------------------------------- instance controls
@@ -478,19 +487,37 @@ def test_instance_fail_and_restore_are_audited_reg5_transitions():
     assert all(OPERATOR in e["payload"]["detail"] for e in operator_events)
 
 
-def test_instance_restore_to_reserve():
+def test_restore_returns_the_reserve_to_reserve_preserving_orc3_topology():
+    """Review finding: a plain fail/restore round trip must NOT silently
+    promote the ORC-3 reserve into the discoverable pool."""
     db = ready_db()
     client = make_client(db)
     client.post(
         "/api/catalog/instances/agent-workforce-02", headers=AUTHED, json={"action": "fail"}
     )
     response = client.post(
-        "/api/catalog/instances/agent-workforce-02",
+        "/api/catalog/instances/agent-workforce-02", headers=AUTHED, json={"action": "restore"}
+    )
+    assert response.status_code == 200
+    assert instance_state(db, "agent-workforce-02") == "RESERVE"  # remembered, not IDLE
+    doc = registry.instance_ref(db, "agent-workforce-02").get().to_dict()
+    assert "failed_from_state" not in doc  # marker cleared on restore
+    assert registry.find_reserve_instance(db, "workforce") is not None
+
+
+def test_restore_explicit_target_state_still_wins():
+    db = ready_db()
+    client = make_client(db)
+    client.post(
+        "/api/catalog/instances/agent-workforce-01", headers=AUTHED, json={"action": "fail"}
+    )
+    response = client.post(
+        "/api/catalog/instances/agent-workforce-01",
         headers=AUTHED,
         json={"action": "restore", "target_state": "RESERVE"},
     )
     assert response.status_code == 200
-    assert instance_state(db, "agent-workforce-02") == "RESERVE"
+    assert instance_state(db, "agent-workforce-01") == "RESERVE"
 
 
 def test_instance_state_rule_violations_409():
@@ -689,6 +716,126 @@ def test_monitor_skips_terminal_workflows():
     assert run_monitoring_cycle(db) == []
     set_status(db, "PLANNING")
     assert run_monitoring_cycle(db) == [wp_id]  # control: same package flags
+
+
+def test_specialist_assignment_for_cancelled_workflow_is_audited_stale_no_op():
+    """Review finding: specialists must not run the model or complete work
+    packages inside a finished workflow."""
+    from services.supply.handlers import make_handler as make_supply
+
+    db = ready_db()
+    set_status(db, "CANCELLED")
+    wp_id = f"wp-supply-{WF.removeprefix('wf-')}"
+    layout.work_package_ref(db, WF, wp_id).set(
+        {
+            "work_package_id": wp_id,
+            "role": "supply",
+            "owner_instance_id": "agent-supply-01",
+            "status": "ASSIGNED",
+            "assignment_seq": 1,
+            "assigned_observed_at": now_iso(),
+        }
+    )
+    assignment = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            work_package_id=wp_id,
+            schema_version="work_package_assignment.v2",
+            event_id=deterministic_event_id("day9-assign", WF),
+            trace_id=TRACE,
+            idempotency_key="idem-day9-assign",
+        ),
+        "payload": {
+            "role": "supply",
+            "objective": "Source the approved actuator and report shipment status.",
+            "assigned_agent_id": "agent-supply-01",
+            "assignment_seq": 1,
+            "inputs": {"equipment_id": "GX12-07", "discrepancy_code": "DSC-0042"},
+        },
+    }
+    model = stub_json({})
+    assert process_message(db, assignment, make_supply(db, model), consumer_identity="forge-supply")
+    assert model.call_count == 0  # guard runs BEFORE the reasoning call
+    assert "ASSIGNMENT_STALE" in trail_reasons(db)
+    wp = layout.work_package_ref(db, WF, wp_id).get().to_dict()
+    assert wp["status"] == "ASSIGNED"  # never completed into the finished workflow
+    outbox = [
+        s.to_dict()["message"]["envelope"]["schema_version"]
+        for s in layout.workflow_ref(db, WF).collection("outbox").stream()
+    ]
+    assert "sourcing_report.v3" not in outbox
+
+
+def test_safety_validation_for_cancelled_workflow_is_audited_stale_no_op():
+    """Review finding: Safety must not draft verdicts for finished workflows."""
+    from services.safety.handlers import make_validation_handler
+
+    db = ready_db()
+    set_status(db, "CANCELLED")
+    model = stub_json({})
+    assert process_message(
+        db, plan_message(), make_validation_handler(db, model), consumer_identity="forge-safety"
+    )
+    assert model.call_count == 0
+    assert "VALIDATION_STALE" in trail_reasons(db)
+    outbox = [
+        s.to_dict()["message"]["envelope"]["schema_version"]
+        for s in layout.workflow_ref(db, WF).collection("outbox").stream()
+    ]
+    assert "validation_verdict.v2" not in outbox
+
+
+def seed_pending_approval(db):
+    request = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            schema_version="approval_request.v2",
+            event_id=deterministic_event_id("day9-apr-req", WF),
+            trace_id=TRACE,
+            idempotency_key="idem-day9-apr-req",
+        ),
+        "payload": {
+            "approval_id": "apr-day9-0001",
+            "action_type": "schedule_override",
+            "recommended_action": "Suspend GX12-07 awaiting the approved part.",
+            "source_refs": ["sourcing_report:day9"],
+            "extracted_facts": ["part HYD-ACT-4402 approved, eta 21 days"],
+            "applicable_rules": ["SP-PART-001"],
+            "constraints": ["no substitution"],
+            "confidence": 1,
+            "alternatives_considered": [
+                {"option": "reject and replan", "rejected_reason": "plan already approved"}
+            ],
+            "versions": {
+                "agent_id": "forge-orchestrator",
+                "model_id": "stub-model",
+                "prompt_version": "n/a",
+                "schema_version": "approval_request.v2",
+            },
+        },
+    }
+    layout.outbox_ref(db, WF, request["envelope"]["event_id"]).set(
+        {"message": request, "published": True, "enqueued_at": now_iso()}
+    )
+    return request
+
+
+def test_finished_workflow_accepts_no_decisions_and_renders_no_live_gates():
+    """Review finding: a leftover approval card on a cancelled workflow must
+    be inert history — not decidable, not rendered as a live gate."""
+    db = ready_db()
+    seed_pending_approval(db)
+    client = make_client(db)
+    client.post(f"/api/workflows/{WF}/cancel", headers=AUTHED, json={})
+    detail = client.get(f"/api/workflows/{WF}").json()
+    assert detail["pending_approvals"] == []
+    response = client.post(
+        f"/api/workflows/{WF}/decide",
+        headers=AUTHED,
+        json={"approval_id": "apr-day9-0001", "decision": "approved"},
+    )
+    assert response.status_code == 409
+    assert layout.approval_ref(db, WF, "apr-day9-0001").get().to_dict() is None
 
 
 # --------------------------------------------------- create_workflow atomicity

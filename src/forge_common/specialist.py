@@ -16,10 +16,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from forge_common import layout
 from forge_common.agent_base import StructuredAgent
 from forge_common.audit import build_audit_event
 from forge_common.bus import TxnWrites
 from forge_common.clock import read_clock
+from forge_common.state import TERMINAL_STATES
 
 
 def make_work_package_handler(
@@ -45,6 +47,26 @@ def make_work_package_handler(
             return  # addressed to another role; consumption is recorded, no output
         envelope = message["envelope"]
         agent_id = payload["assigned_agent_id"]
+        wf_snapshot = layout.workflow_ref(db, envelope["workflow_id"]).get()
+        wf = wf_snapshot.to_dict() if hasattr(wf_snapshot, "to_dict") else wf_snapshot
+        if (wf or {}).get("status") in TERMINAL_STATES:
+            # The workflow finished (HUM-3 cancel or release) while this
+            # assignment was in flight: audited stale no-op BEFORE the model
+            # call — no domain output for a finished workflow.
+            writes.audit_events.append(
+                build_audit_event(
+                    workflow_id=envelope["workflow_id"],
+                    trace_id=envelope["trace_id"],
+                    agent_identity=agent_id,
+                    event_kind="escalation",
+                    reason_code="ASSIGNMENT_STALE",
+                    input_obj={"work_package_id": envelope["work_package_id"]},
+                    output_obj={"status": (wf or {}).get("status")},
+                    effective_at=read_clock(db),
+                    work_package_id=envelope["work_package_id"],
+                )
+            )
+            return
         agent = StructuredAgent(agent_id=agent_id, role=role, model=model)
         variables = {**payload.get("inputs", {}), "objective": payload["objective"]}
         if variables_factory is not None:

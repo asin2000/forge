@@ -674,3 +674,18 @@ injected `now="2026-08-23"` as the monitor cutoff base — a date the wall
 clock reached today, making real assignment timestamps newer than the
 cutoff. Time-dependent test constants are a defect class; the injected now
 is 2100-01-01.
+
+**Adversarial review of the branch (pre-PR), 11 confirmed findings, all
+closed:** specialists and Safety had NO terminal guard — both now take the
+audited stale no-op (ASSIGNMENT_STALE / VALIDATION_STALE) before their
+model calls; POST /decide now 409s on a finished workflow and the detail
+view renders leftover approval requests as history, not live cards; the
+bulletin's operator-attribution audit moved BEFORE the relay with a
+deterministic event id (a failed forward can no longer lose the principal);
+instance restore returns the instance to its REMEMBERED pre-failure state
+(a fail/restore round trip no longer silently converts the ORC-3 RESERVE
+into an assignable primary — `failed_from_state` is persisted on fail and
+cleared on restore); HUM-3's drain wording now names exactly which stale
+paths audit and which consume silently; stale doc lines fixed (layout
+docstring, SUBMISSION closing line — which also still listed the Google
+credits item the entrant ordered closed; removed).

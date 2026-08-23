@@ -137,7 +137,11 @@ def create_app(
                 }
                 for e in trail
             ],
-            "pending_approvals": _pending_approvals(workflow_id),
+            # a finished workflow renders no live gates (HUM-3): leftover
+            # requests are history in the trail, not decidable cards
+            "pending_approvals": (
+                [] if doc["status"] in state.TERMINAL_STATES else _pending_approvals(workflow_id)
+            ),
         }
 
     def _pending_requests(workflow_id: str) -> dict[str, dict[str, Any]]:
@@ -201,6 +205,12 @@ def create_app(
         pending = _pending_requests(workflow_id)
         if approval_id not in pending:
             raise HTTPException(404, "no such pending approval request")
+        wf_snapshot = layout.workflow_ref(db, workflow_id).get()
+        wf_doc = wf_snapshot.to_dict() if hasattr(wf_snapshot, "to_dict") else wf_snapshot
+        if (wf_doc or {}).get("status") in state.TERMINAL_STATES:
+            # HUM-3: a finished workflow accepts no further decisions — the
+            # leftover request is inert history, not a live gate.
+            raise HTTPException(409, f"workflow is already {wf_doc['status']}")
         decision = body.get("decision")
         if decision not in ("approved", "rejected"):
             raise HTTPException(400, "decision must be approved or rejected")
@@ -389,6 +399,29 @@ def create_app(
         if ingest_forward is None:
             raise HTTPException(503, "cyber-trust forwarding is not configured")
         doc_id = f"doc-bulletin-{uuid.uuid4().hex[:8]}"
+        # The operator-attribution audit is recorded BEFORE the relay, with a
+        # deterministic id: whatever fails downstream, the trail names the
+        # principal behind the injection (HUM-3). The quarantine/screening
+        # OUTCOMES are audited by cyber-trust itself on its own path.
+        audit = build_audit_event(
+            workflow_id=workflow_id,
+            trace_id=doc["trace_id"],
+            agent_identity=OPERATOR_SURFACE_IDENTITY,
+            event_kind="escalation",
+            reason_code="OPERATOR_BULLETIN_INJECTED",
+            input_obj={"doc_id": doc_id, "source": "operator-console"},
+            output_obj={"relayed_to": "forge-cyber-trust"},
+            effective_at=read_clock(db),
+            detail=bounded_json_detail({"operator": operator}),
+            event_id=deterministic_event_id("operator-bulletin", workflow_id, doc_id),
+        )
+
+        def _record(txn: Any) -> None:
+            # leading read: real transactions begin lazily on the first read
+            layout.txn_get_dict(txn, layout.workflow_ref(db, workflow_id))
+            txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
+
+        layout.run_in_transaction(db, _record)
         try:
             result = ingest_forward(
                 {
@@ -401,24 +434,6 @@ def create_app(
         except Exception as exc:
             # metadata-only on purpose: never echo upstream response bodies
             raise HTTPException(502, f"cyber-trust ingest failed: {type(exc).__name__}") from exc
-        audit = build_audit_event(
-            workflow_id=workflow_id,
-            trace_id=doc["trace_id"],
-            agent_identity=OPERATOR_SURFACE_IDENTITY,
-            event_kind="escalation",
-            reason_code="OPERATOR_BULLETIN_INJECTED",
-            input_obj={"doc_id": doc_id, "source": "operator-console"},
-            output_obj={"verdict_published": bool(result.get("verdict_published"))},
-            effective_at=read_clock(db),
-            detail=bounded_json_detail({"operator": operator}),
-        )
-
-        def _record(txn: Any) -> None:
-            # leading read: real transactions begin lazily on the first read
-            layout.txn_get_dict(txn, layout.workflow_ref(db, workflow_id))
-            txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
-
-        layout.run_in_transaction(db, _record)
         return {
             "workflow_id": workflow_id,
             "doc_id": doc_id,

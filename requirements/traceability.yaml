@@ -179,10 +179,12 @@ requirements:
       - src/forge_common/state.py
       - src/forge_common/registry.py
       - src/forge_common/clock.py
+      - src/forge_common/specialist.py
       - services/dashboard/app.py
       - services/dashboard/ui.py
       - services/orchestrator/handlers.py
       - services/orchestrator/monitor.py
+      - services/safety/handlers.py
       - infra/deploy.sh
     verified_by:
       - tests/test_day9_operator_controls.py

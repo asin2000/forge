@@ -127,7 +127,7 @@ Baseline evidence was frozen at tag **`v1.2-demo`** (DFT-4; final patch
 live acceptance before recording; the tag advances to **`v1.3-demo`** when
 its 10/10 completes. CI enforces eight gates on every PR (lint,
 contracts+ICD-3, unit, real-emulator integration, secrets, dead-code,
-config/registry+residency, traceability); the suite is **283 tests (262 unit
+config/registry+residency, traceability); the suite is **287 tests (266 unit
 + 21 real-client emulator)** and traceability runs in strict mode.
 
 Live acceptance on the frozen commit, verbatim captures in

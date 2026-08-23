@@ -135,31 +135,37 @@ def operator_set_instance_state(
     """HUM-3 anomaly control: audited operator instance-state induction.
 
     ``fail`` marks a non-FAILED instance FAILED (the injected anomaly the
-    demo narrates: discovery then skips it and dependent work escalates);
-    ``restore`` returns a FAILED instance to IDLE (or RESERVE). Both are
-    REG-5 instance transitions: the state write and its AUD-1 event commit
-    in one transaction under the registry system workflow, with the
-    authenticated operator recorded verbatim. This never fabricates an
-    agent_failure_event — failure detection stays with its real producers.
+    demo narrates: discovery then skips it and dependent work escalates)
+    and remembers the pre-failure state; ``restore`` returns a FAILED
+    instance to that remembered state (RESERVE stays a reserve — the ORC-3
+    topology survives a fail/restore round trip), or to an explicit
+    ``target_state`` of IDLE/RESERVE. Both are REG-5 instance transitions:
+    the state write and its AUD-1 event commit in one transaction under the
+    registry system workflow, with the authenticated operator recorded
+    verbatim. This never fabricates an agent_failure_event — failure
+    detection stays with its real producers.
     """
-    if action == "fail":
-        target = "FAILED"
-    elif action == "restore":
-        target = target_state or "IDLE"
-        if target not in ("IDLE", "RESERVE"):
-            raise InvalidInstanceTransition(f"restore target must be IDLE or RESERVE, not {target}")
-    else:
+    if action not in ("fail", "restore"):
         raise InvalidInstanceTransition(f"unknown instance action {action!r}")
+    if target_state is not None and target_state not in ("IDLE", "RESERVE"):
+        raise InvalidInstanceTransition(
+            f"restore target must be IDLE or RESERVE, not {target_state}"
+        )
 
     def _apply(txn: Any) -> dict[str, Any]:
         instance = layout.txn_get_dict(txn, instance_ref(db, instance_id))
         if not instance:
             raise InvalidInstanceTransition(f"unknown instance {instance_id}")
         source = instance.get("state")
-        if action == "fail" and source == "FAILED":
-            raise InvalidInstanceTransition(f"{instance_id} is already FAILED")
-        if action == "restore" and source != "FAILED":
-            raise InvalidInstanceTransition(f"{instance_id} is {source}, not FAILED")
+        if action == "fail":
+            if source == "FAILED":
+                raise InvalidInstanceTransition(f"{instance_id} is already FAILED")
+            target = "FAILED"
+        else:
+            if source != "FAILED":
+                raise InvalidInstanceTransition(f"{instance_id} is {source}, not FAILED")
+            remembered = instance.get("failed_from_state")
+            target = target_state or (remembered if remembered in ("IDLE", "RESERVE") else "IDLE")
         clock_doc = layout.txn_get_dict(txn, layout.clock_ref(db))
         audit = build_audit_event(
             workflow_id=REGISTRY_AUDIT_WORKFLOW,
@@ -174,10 +180,12 @@ def operator_set_instance_state(
             effective_at=int(clock_doc["logical_time"]) if clock_doc else 0,
             detail=bounded_json_detail({"operator": operator}),
         )
-        txn.set(
-            instance_ref(db, instance_id),
-            {**instance, "state": target, "state_changed_observed_at": now_iso()},
-        )
+        updated = {**instance, "state": target, "state_changed_observed_at": now_iso()}
+        if action == "fail":
+            updated["failed_from_state"] = source
+        else:
+            updated.pop("failed_from_state", None)
+        txn.set(instance_ref(db, instance_id), updated)
         txn.create(
             layout.audit_ref(db, REGISTRY_AUDIT_WORKFLOW, audit["envelope"]["event_id"]), audit
         )

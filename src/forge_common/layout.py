@@ -3,7 +3,7 @@
 Layout (all demo-scale collections; reconstruction reads these alone, AUD-2):
 
 - ``system/logical_clock``                     {"logical_time": int}
-- ``workflows/{workflow_id}``                  workflow_state.v2 document
+- ``workflows/{workflow_id}``                  workflow_state.v3 document
 - ``workflows/{workflow_id}/audit/{event_id}`` full audit_event.v2 message
 - ``workflows/{workflow_id}/outbox/{event_id}`` {"message": ..., "published": bool}
 - ``workflows/{workflow_id}/inbox/{idempotency_key}`` processed marker

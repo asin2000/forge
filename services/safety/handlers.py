@@ -19,6 +19,7 @@ from forge_common.agent_base import StructuredAgent
 from forge_common.audit import build_audit_event
 from forge_common.bus import TxnWrites
 from forge_common.clock import read_clock
+from forge_common.state import TERMINAL_STATES
 
 ROLE = "safety"
 AGENT_ID = "agent-safety-01"
@@ -63,6 +64,25 @@ def make_validation_handler(db: Any, model: Any):
         engine = VALIDATORS.get(envelope["schema_version"])
         if engine is None:
             return  # not a proposed action; consumption recorded, no verdict
+        wf_snapshot = layout.workflow_ref(db, envelope["workflow_id"]).get()
+        wf = wf_snapshot.to_dict() if hasattr(wf_snapshot, "to_dict") else wf_snapshot
+        if (wf or {}).get("status") in TERMINAL_STATES:
+            # Finished workflow (HUM-3 cancel or release): audited stale
+            # no-op BEFORE the model call — no verdict is owed to a
+            # workflow that can no longer act on one.
+            writes.audit_events.append(
+                build_audit_event(
+                    workflow_id=envelope["workflow_id"],
+                    trace_id=envelope["trace_id"],
+                    agent_identity=AGENT_ID,
+                    event_kind="escalation",
+                    reason_code="VALIDATION_STALE",
+                    input_obj={"subject_schema": envelope["schema_version"]},
+                    output_obj={"status": (wf or {}).get("status")},
+                    effective_at=read_clock(db),
+                )
+            )
+            return
         plan = message["payload"]
         discrepancy = _trusted_discrepancy(db, envelope["workflow_id"], envelope["work_package_id"])
         violations = engine(plan, discrepancy_code=discrepancy)

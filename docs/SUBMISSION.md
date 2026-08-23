@@ -151,9 +151,7 @@ flagged each as unverifiable from the repo. None is an engineering blocker.
       government-agency employment and no real/apparent conflict of interest
       (Official Rules §3) — pertinent given the fictional defense-adjacent
       scenario.
-- [ ] **$150 Google Cloud credits** redeemed via the Resources-tab form
-      (https://forms.gle/5PtXmw1dSbDnpYke9) so usage bills to credit.
-
-Everything engineering-side is frozen at `v1.2-demo` and live-validated
-(see `docs/verification/`); the above are submission-portal and account
-actions only.
+Engineering-side evidence lives in `docs/verification/` (baseline frozen at
+`v1.2-demo.3`; the v1.3 operator-console re-acceptance advances the tag to
+`v1.3-demo` when its 10/10 completes); the above are submission-portal and
+account actions only.
