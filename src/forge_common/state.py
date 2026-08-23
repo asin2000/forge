@@ -28,19 +28,34 @@ from forge_common import layout
 from forge_common.audit import bounded_json_detail, build_audit_event, now_iso
 from forge_common.contracts import validate_message
 
-# Spine states (workflow_state.v1 enum). AWAITING_RELEASE_APPROVAL ->
+# Spine states (workflow_state.v3 enum). AWAITING_RELEASE_APPROVAL ->
 # ASSEMBLY_RESUMED is the rejected-release rework path (HUM-1 allows reject).
+# CANCELLED (HUM-3) is reachable from every non-terminal state via the audited
+# operator cancel and from nowhere else; it is terminal like RELEASED.
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
-    "INTAKE": {"PLANNING", "BLOCKED_AGENT_FAILURE"},
-    "PLANNING": {"VALIDATING", "BLOCKED_AGENT_FAILURE"},
-    "VALIDATING": {"AWAITING_SCHEDULE_APPROVAL", "PLANNING", "BLOCKED_AGENT_FAILURE"},
-    "AWAITING_SCHEDULE_APPROVAL": {"SUSPENDED_AWAITING_PART", "PLANNING"},
-    "SUSPENDED_AWAITING_PART": {"ASSEMBLY_RESUMED"},
-    "ASSEMBLY_RESUMED": {"AWAITING_RELEASE_APPROVAL", "BLOCKED_AGENT_FAILURE"},
-    "AWAITING_RELEASE_APPROVAL": {"RELEASED", "ASSEMBLY_RESUMED"},
+    "INTAKE": {"PLANNING", "BLOCKED_AGENT_FAILURE", "CANCELLED"},
+    "PLANNING": {"VALIDATING", "BLOCKED_AGENT_FAILURE", "CANCELLED"},
+    "VALIDATING": {
+        "AWAITING_SCHEDULE_APPROVAL",
+        "PLANNING",
+        "BLOCKED_AGENT_FAILURE",
+        "CANCELLED",
+    },
+    "AWAITING_SCHEDULE_APPROVAL": {"SUSPENDED_AWAITING_PART", "PLANNING", "CANCELLED"},
+    "SUSPENDED_AWAITING_PART": {"ASSEMBLY_RESUMED", "CANCELLED"},
+    "ASSEMBLY_RESUMED": {"AWAITING_RELEASE_APPROVAL", "BLOCKED_AGENT_FAILURE", "CANCELLED"},
+    "AWAITING_RELEASE_APPROVAL": {"RELEASED", "ASSEMBLY_RESUMED", "CANCELLED"},
     "RELEASED": set(),
-    "BLOCKED_AGENT_FAILURE": {"PLANNING"},
+    "BLOCKED_AGENT_FAILURE": {"PLANNING", "CANCELLED"},
+    "CANCELLED": set(),
 }
+
+#: States with no outgoing edges. Handlers consult this to turn late bus
+#: traffic for a finished workflow into audited stale no-ops instead of
+#: letting apply_transition raise into a 500 -> DLQ loop (HUM-3, ICD-5).
+TERMINAL_STATES: frozenset[str] = frozenset(
+    state for state, targets in ALLOWED_TRANSITIONS.items() if not targets
+)
 
 #: target state -> required HUM-1 action_type
 GATED_TARGETS: dict[str, str] = {
@@ -256,9 +271,25 @@ def apply_transition(
 
 
 def create_workflow(
-    db: Any, *, workflow_id: str, equipment_id: str, trace_id: str, logical_time: int
+    db: Any,
+    *,
+    workflow_id: str,
+    equipment_id: str,
+    trace_id: str,
+    logical_time: int,
+    agent_identity: str = "forge-orchestrator",
+    detail: str | None = None,
+    outbox_messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Create the workflow state document in INTAKE, audited (ORC-5, AUD-1)."""
+    """Create the workflow state document in INTAKE, audited (ORC-5, AUD-1).
+
+    ``outbox_messages`` ride the SAME transaction as the state doc and its
+    audit (AUD-2) — the HUM-3 operator start enqueues the triggering
+    nmc_event.v2 here so the workflow can never exist without its trigger
+    durably queued (the post-commit drain, or the /tick sweep, publishes it).
+    """
+    for message in outbox_messages or []:
+        validate_message(message)  # ICD-2: publish-side gate at enqueue
 
     def _create(txn: Any) -> dict[str, Any]:
         # Leading read: real transactions begin lazily on the first read —
@@ -280,16 +311,22 @@ def create_workflow(
         audit = build_audit_event(
             workflow_id=workflow_id,
             trace_id=trace_id,
-            agent_identity="forge-orchestrator",
+            agent_identity=agent_identity,
             event_kind="state_change",
             reason_code="WORKFLOW_CREATED",
             input_obj={"equipment_id": equipment_id},
             output_obj=doc,
             effective_at=logical_time,
             state_after="INTAKE",
+            detail=detail,
         )
         txn.create(layout.workflow_ref(db, workflow_id), doc)
         txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
+        for message in outbox_messages or []:
+            txn.create(
+                layout.outbox_ref(db, workflow_id, message["envelope"]["event_id"]),
+                {"message": message, "published": False, "enqueued_at": now_iso()},
+            )
         return doc
 
     return layout.run_in_transaction(db, _create)

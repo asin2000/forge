@@ -33,6 +33,7 @@ from forge_common.bus import TxnWrites
 from forge_common.clock import read_clock
 from forge_common.contracts import validate_message
 from forge_common.messages import build_envelope, deterministic_event_id
+from forge_common.state import TERMINAL_STATES
 
 ORCHESTRATOR_IDENTITY = "forge-orchestrator"
 
@@ -132,6 +133,24 @@ def make_nmc_handler(db: Any, *, model: Any):
         payload = message["payload"]
         workflow_id = envelope["workflow_id"]
         trace_id = envelope["trace_id"]
+        wf = _get_dict(layout.workflow_ref(db, workflow_id))
+        if not wf or wf.get("status") != "INTAKE":
+            # Late or replayed trigger — e.g. the workflow was cancelled
+            # (HUM-3) while this event was in flight: audited stale no-op
+            # BEFORE the model call, never an illegal-edge 500 into the DLQ.
+            writes.audit_events.append(
+                build_audit_event(
+                    workflow_id=workflow_id,
+                    trace_id=trace_id,
+                    agent_identity=ORCHESTRATOR_IDENTITY,
+                    event_kind="escalation",
+                    reason_code="NMC_EVENT_STALE",
+                    input_obj=payload,
+                    output_obj={"status": (wf or {}).get("status")},
+                    effective_at=read_clock(db),
+                )
+            )
+            return
         try:
             decomposition = constrained_json(
                 runner,
@@ -217,6 +236,13 @@ def make_failure_handler(db: Any):
         trace_id = envelope["trace_id"]
         role = payload["role"]
         work_package_id = envelope["work_package_id"]
+        wf = _get_dict(layout.workflow_ref(db, workflow_id))
+        if (wf or {}).get("status") in TERMINAL_STATES:
+            # Finished workflow (HUM-3 cancel or release): consume with NO
+            # writes, mirroring the stale-ownership semantics below. The
+            # monitor also skips terminal workflows; this covers the
+            # in-flight race window.
+            return
         snapshot = layout.work_package_ref(db, workflow_id, work_package_id).get()
         wp = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
         if wp and (
@@ -381,6 +407,24 @@ def make_plan_handler(db: Any):
         plan = message["payload"]
         workflow_id = envelope["workflow_id"]
         trace_id = envelope["trace_id"]
+        wf_now = _get_dict(layout.workflow_ref(db, workflow_id))
+        if (wf_now or {}).get("status") in TERMINAL_STATES:
+            # A plan landing after cancel/release must not claim packages or
+            # publish assignments into a finished workflow (HUM-3): audited
+            # stale no-op with ZERO side effects.
+            writes.audit_events.append(
+                build_audit_event(
+                    workflow_id=workflow_id,
+                    trace_id=trace_id,
+                    agent_identity=ORCHESTRATOR_IDENTITY,
+                    event_kind="escalation",
+                    reason_code="PLAN_STALE",
+                    input_obj={"plan_id": plan["plan_id"]},
+                    output_obj={"status": (wf_now or {}).get("status")},
+                    effective_at=read_clock(db),
+                )
+            )
+            return
         task_codes = [task["task_code"] for task in plan.get("tasks", [])]
         inputs = {
             "task_codes": task_codes,
@@ -685,6 +729,12 @@ def make_verdict_handler(db: Any):
                     effective_at=read_clock(db),
                 )
             )
+
+        if status in TERMINAL_STATES:
+            # Cancelled/released workflows accept no verdicts — not even the
+            # roster branch below may touch completion evidence (HUM-3).
+            _audit_only("VERDICT_STALE", "verdict arrived for a finished workflow")
+            return
 
         schedule_subjects = ("maintenance_action_plan.v2", "sourcing_report.v3")
         if status == "VALIDATING" and approved and subject in schedule_subjects:

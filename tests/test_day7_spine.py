@@ -406,7 +406,9 @@ def test_monitor_derives_trace_from_workflow_doc():
         make_nmc_handler(db, model=stub_json(DECOMPOSITION)),
         consumer_identity="forge-orchestrator",
     )
-    flagged = run_monitoring_cycle(db, now="2026-08-23T00:00:00.000000Z")
+    # far-future injected now: the wall clock must never catch up and make
+    # real assignment timestamps newer than the cutoff (bit us on 08-23)
+    flagged = run_monitoring_cycle(db, now="2100-01-01T00:00:00.000000Z")
     assert flagged, "assignments past the timeout must flag"
     failures = outbox_messages(db, "agent_failure_event.v2")
     assert failures and all(m["envelope"]["trace_id"] == TRACE for m in failures)

@@ -11,9 +11,12 @@ this in sync with `README.md`; the README is authoritative for setup.
 - **Repository:** https://github.com/asin2000/forge (private — **must be
   shared** with `testing@devpost.com` and `cloudhackathons@google.com` before
   SUB-7; see Open items — grant collaborator access on GitHub and confirm)
-- **Frozen artifact:** git tag `v1.2-demo`
-- **Hosted URL:** the read-only approval dashboard runs on Cloud Run behind
-  IAM (`--no-allow-unauthenticated`), so it is not publicly reachable by
+- **Frozen artifact:** git tag `v1.3-demo` (advances from `v1.2-demo.3`
+  when the v1.3 operator-console re-acceptance completes; see README
+  Acceptance & evidence)
+- **Hosted URL:** the operator console (read-only except the audited HUM-1
+  approvals and HUM-3 operator controls) runs on Cloud Run behind IAM
+  (`--no-allow-unauthenticated`), so it is not publicly reachable by
   design; the demo video shows it live. Per the rules, the app need not be
   publicly live at judging — reproducibility is proven by the repo + the
   one-command `infra/deploy.sh`.
@@ -31,9 +34,17 @@ audit trail and a single distributed trace. All data is synthetic.
 ## Features & functionality
 
 - **Agent discovery (Agent Registry).** Declarative `agents/registry.yaml`
-  loaded to Firestore; capability-based discovery; a read-only Agent Catalog
-  in the dashboard with health *derived* from heartbeat staleness. Definition
-  and instance lifecycle changes emit audit events (REG-1..5).
+  loaded to Firestore; capability-based discovery; an Agent Catalog in the
+  console with health *derived* from heartbeat staleness. Definition and
+  instance lifecycle changes emit audit events (REG-1..5).
+- **A drivable live demo (operator console, HUM-3).** Judges don't have to
+  take the video's word for it: an authenticated operator can start a
+  recovery (injecting the same `nmc_event` the field would emit), cancel it
+  (an audited terminal state; late bus traffic drains as audited no-ops),
+  advance the Logical Clock, inject the poisoned bulletin through the live
+  quarantine path, and fail/restore an agent instance — every action
+  recorded in the audit trail with the operator's authenticated identity,
+  and a live activity feed shows the agents working in real time.
 - **Weeks of asynchronous context (Agent Runtime + Memory).** A Logical Clock
   drives a real 21-day part-delay: the workflow suspends, and a scheduled
   heartbeat resumes it when the simulated ETA arrives — state, inbox/outbox,

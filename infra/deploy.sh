@@ -170,12 +170,13 @@ for role in "${AGENT_ROLES[@]}" cyber-trust; do
     --quiet
 done
 
-echo "== dashboard / approval surface (HUM-1: Cloud Run IAM, no unauthenticated)"
+echo "== dashboard / operator console (HUM-1/HUM-3: Cloud Run IAM, no unauthenticated)"
+CT_URL="$(gcloud run services describe forge-cyber-trust --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)')"
 gcloud run deploy forge-dashboard \
   --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE" \
   --service-account "forge-dashboard@${PROJECT_ID}.iam.gserviceaccount.com" \
   --no-allow-unauthenticated \
-  --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},FORGE_AUTH_MODE=cloudrun-iam,FORGE_BUS_TOPIC=${TOPIC},FORGE_TRACE_EXPORT=cloud" \
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},FORGE_AUTH_MODE=cloudrun-iam,FORGE_BUS_TOPIC=${TOPIC},FORGE_TRACE_EXPORT=cloud,FORGE_CYBER_TRUST_URL=${CT_URL}" \
   `# cloudrun-iam: identity ONLY from the platform-validated bearer token;` \
   `# the plain x-goog-authenticated-user-email header is forgeable and ignored.` \
   --quiet
@@ -214,6 +215,12 @@ done
 # REG-1 probe access to cyber-trust (deployed service, no push subscription)
 gcloud run services add-iam-policy-binding "forge-cyber-trust" --region "$REGION" --project "$PROJECT_ID" --quiet >/dev/null \
   --member "serviceAccount:forge-orchestrator@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role roles/run.invoker
+
+# HUM-3: the operator console relays the poisoned-bulletin anomaly to the
+# deployed cyber-trust /ingest — invoke ONLY; no other grant widens.
+gcloud run services add-iam-policy-binding "forge-cyber-trust" --region "$REGION" --project "$PROJECT_ID" --quiet >/dev/null \
+  --member "serviceAccount:forge-dashboard@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role roles/run.invoker
 
 echo "== retiring the Day-6 legacy pull subscription (workers use push)"

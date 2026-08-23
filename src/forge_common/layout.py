@@ -27,7 +27,7 @@ from google.cloud import firestore
 from jsonschema import Draft202012Validator, FormatChecker
 
 _STATE_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[2] / "contracts" / "state" / "workflow_state.v2.schema.json"
+    Path(__file__).resolve().parents[2] / "contracts" / "state" / "workflow_state.v3.schema.json"
 )
 
 CLOCK_DOC = ("system", "logical_clock")

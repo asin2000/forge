@@ -1902,3 +1902,61 @@ def test_day7_full_spine_bus_mediated_real_client(db):
     assert bus_hops.count("work_package_assignment.v2") == 3
     assert bus_hops.count("validation_verdict.v2") >= 2
     assert "due_event.v2" in bus_hops and bus_hops.count("approval_decision.v2") == 2
+
+
+def test_day9_operator_console_start_cancel_real_client(db):
+    """HUM-3 on the real client: console start commits the state doc, the
+    operator-attributed WORKFLOW_CREATED audit, and the triggering
+    nmc_event.v2 outbox copy in one transaction; console cancel is the
+    audited terminal transition; a late NMC then drains as an audited
+    stale no-op instead of an illegal-edge failure."""
+    from fastapi.testclient import TestClient
+    from services.dashboard.app import create_app
+    from services.orchestrator.handlers import make_nmc_handler
+    from tests.adk_stub import stub_json
+
+    from forge_common import layout
+    from forge_common.bus import process_message
+
+    operator = "operator@example.test"
+    layout.clock_ref(db).set({"logical_time": 0})
+    client = TestClient(create_app(db, verifier=lambda token: operator))
+    headers = {"authorization": "Bearer emu-token"}
+
+    started = client.post(
+        "/api/workflows",
+        headers=headers,
+        json={
+            "equipment_id": "GX12-05",
+            "discrepancy_code": "DSC-0042",
+            "description": "Emulator console-start hydraulic fault",
+        },
+    )
+    assert started.status_code == 200
+    wf = started.json()["workflow_id"]
+    doc = layout.workflow_ref(db, wf).get().to_dict()
+    assert doc["status"] == "INTAKE" and doc["equipment_id"] == "GX12-05"
+    outbox = [
+        s.to_dict()["message"] for s in layout.workflow_ref(db, wf).collection("outbox").stream()
+    ]
+    assert [m["envelope"]["schema_version"] for m in outbox] == ["nmc_event.v2"]
+    created = [
+        e
+        for e in state.reconstruct_audit_trail(db, wf)
+        if e["payload"]["reason_code"] == "WORKFLOW_CREATED"
+    ]
+    assert len(created) == 1 and operator in created[0]["payload"]["detail"]
+
+    cancelled = client.post(f"/api/workflows/{wf}/cancel", headers=headers, json={})
+    assert cancelled.status_code == 200
+    assert layout.workflow_ref(db, wf).get().to_dict()["status"] == "CANCELLED"
+    assert client.post(f"/api/workflows/{wf}/cancel", headers=headers, json={}).status_code == 409
+
+    model = stub_json({"objectives": {"maintenance": "n/a plan", "supply": "n/a source"}})
+    assert process_message(
+        db, outbox[0], make_nmc_handler(db, model=model), consumer_identity="forge-orchestrator"
+    )
+    assert model.call_count == 0
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, wf)]
+    assert "NMC_EVENT_STALE" in reasons
+    assert layout.workflow_ref(db, wf).get().to_dict()["status"] == "CANCELLED"

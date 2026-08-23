@@ -22,7 +22,7 @@ EXPECTED_IDS = (
     [f"ORC-{i}" for i in range(1, 6)]
     + [f"AGT-{i}" for i in range(1, 8)]
     + [f"SEC-{i}" for i in range(1, 5)]
-    + [f"HUM-{i}" for i in range(1, 3)]
+    + [f"HUM-{i}" for i in range(1, 4)]  # v1.3: HUM-3
     + [f"AUD-{i}" for i in range(1, 4)]
     + [f"REG-{i}" for i in range(1, 6)]  # v1.2
     + [f"OBS-{i}" for i in range(1, 3)]  # v1.2
@@ -59,7 +59,7 @@ def main() -> int:
     if missing:
         failures.append(f"unmapped requirement IDs: {missing}")
     if unknown:
-        failures.append(f"unknown requirement IDs (not in baseline v1.1.2): {unknown}")
+        failures.append(f"unknown requirement IDs (not in the requirements baseline): {unknown}")
 
     referenced: set[str] = set()
     for rid, entry in reqs.items():

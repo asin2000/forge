@@ -10,8 +10,9 @@ Labs" appears only as the entrant's professional affiliation; this is not a
 company or team entry, no Anansi Labs materials are included (see
 `PREEXISTING_WORK.md`), and any prize is payable to the entrant personally.
 
-**Governing baseline:** `FORGE-REQUIREMENTS.md` v1.2 (repo root, ratified
-2026-08-21). If code and that document disagree, the document wins. Schedule:
+**Governing baseline:** `FORGE-REQUIREMENTS.md` v1.3 (repo root; v1.2
+ratified 2026-08-21, v1.3 operator-console amendment 2026-08-23 per entrant
+directive). If code and that document disagree, the document wins. Schedule:
 `FORGE-BUILD-PLAN.md` (repo root). AI-assisted sessions bootstrap from
 `CLAUDE.md` (DFT-2). Every module traces to a requirement ID via
 `requirements/traceability.yaml` (DFT-1).
@@ -34,7 +35,14 @@ Firestore; the bus is Pub/Sub with per-workflow ordering keys. Each role
 deploys as its own Cloud Run service with its own service account; boundaries
 are enforced at IAM. External documents pass a quarantine-first pipeline
 (bounded parser → Model Armor → tool-less classifier) and only a structured
-verdict plus tightly-typed safe metadata ever reaches the bus. Reasoning:
+verdict plus tightly-typed safe metadata ever reaches the bus. A hosted
+operator console (read-only except the audited HUM-1 approvals and HUM-3
+operator controls) lets an authenticated operator start and cancel
+workflows, advance the Logical Clock, and inject anomalies — the poisoned
+bulletin through the live quarantine path, and audited agent-instance
+failure/restore — with a live fleet-wide activity feed projected straight
+from the audit trail, so a judge can drive the running system, not just
+watch it. Reasoning:
 `gemini-3.5-flash` on Vertex AI at the DAT-1 map's `us` multi-region
 (everything else pins `us-central1`; see Data residency below).
 
@@ -114,10 +122,13 @@ data is synthetic (SUB-5).
 
 ## Acceptance & evidence
 
-Frozen at tag **`v1.2-demo`** (DFT-4). CI enforces eight gates on every PR
-(lint, contracts+ICD-3, unit, real-emulator integration, secrets, dead-code,
-config/registry+residency, traceability); the suite is **221 tests (201 unit
-+ 20 real-client emulator)** and traceability runs in strict mode.
+Baseline evidence was frozen at tag **`v1.2-demo`** (DFT-4; final patch
+`v1.2-demo.3`). The v1.3 operator-console amendment (HUM-3) re-runs the full
+live acceptance before recording; the tag advances to **`v1.3-demo`** when
+its 10/10 completes. CI enforces eight gates on every PR (lint,
+contracts+ICD-3, unit, real-emulator integration, secrets, dead-code,
+config/registry+residency, traceability); the suite is **283 tests (262 unit
++ 21 real-client emulator)** and traceability runs in strict mode.
 
 Live acceptance on the frozen commit, verbatim captures in
 `docs/verification/`:
@@ -146,4 +157,6 @@ in `.github/workflows/pr-gate.yml`.
 PRs only — no direct commits to `main` (branch protection). New dependencies
 need a one-line justification in the PR description (DFT-3). Work not
 traceable to a requirement ID is rejected in review (DFT-2). After the Day-8
-freeze (`v1.2-demo` tag), only demo-spine defects merge (DFT-4).
+freeze, only demo-spine defects merge (DFT-4); the v1.3 amendment is the one
+entrant-directed scope change since, and it resets the acceptance count
+(fresh CI-8 10/10 before recording).
