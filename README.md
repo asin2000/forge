@@ -40,9 +40,11 @@ operator console (read-only except the audited HUM-1 approvals and HUM-3
 operator controls) lets an authenticated operator start and cancel
 workflows, advance the Logical Clock, and inject anomalies — the poisoned
 bulletin through the live quarantine path, and audited agent-instance
-failure/restore — with a live fleet-wide activity feed projected straight
-from the audit trail, so a judge can drive the running system, not just
-watch it. Reasoning:
+failure/restore — with a fleet-readiness strip (per-vehicle status derived
+from workflow state alone), a per-agent Agent Operations dock whose lanes
+render live claims, assignments, and audit events — nothing the trail
+cannot prove — and a fleet-wide activity feed, so a judge can drive the
+running system and watch every agent work, not just take the video's word. Reasoning:
 `gemini-3.5-flash` on Vertex AI at the DAT-1 map's `us` multi-region
 (everything else pins `us-central1`; see Data residency below).
 
@@ -122,7 +124,8 @@ data is synthetic (SUB-5).
 
 ## Acceptance & evidence
 
-Frozen at tag **`v1.3-demo`** (DFT-4; commit `7e19d47`). The v1.3
+Frozen at tag **`v1.3-demo.3`** (DFT-4; commit `18ec4b3`; series began
+at `v1.3-demo` = `7e19d47`). The v1.3
 operator-console amendment (HUM-3) reset the acceptance count per the
 entrant's rule, and the full live acceptance re-ran on the new tag
 (baseline history: `v1.2-demo` … `v1.2-demo.3`). CI enforces eight gates on
@@ -134,10 +137,12 @@ strict mode.
 Live acceptance on the frozen commit, verbatim captures in
 `docs/verification/`:
 
-- **CI-8 — 10/10 consecutive** live spines on `v1.3-demo`, NMC → RELEASED,
-  real `gemini-3.5-flash` reasoning with two human-gated approvals each,
-  first attempt, zero resets (`scripts/acceptance_run.sh`; record in
-  `docs/verification/2026-08-23-v13-acceptance.md`; the `v1.2-demo` series
+- **CI-8 — 10/10 consecutive** live spines, NMC → RELEASED, real
+  `gemini-3.5-flash` reasoning with two human-gated approvals each — run
+  fresh on BOTH v1.3 tags, first attempt, zero resets each time
+  (`scripts/acceptance_run.sh`; records in
+  `docs/verification/2026-08-23-v13-acceptance.md` and
+  `docs/verification/2026-08-24-day10-console.md`; the `v1.2-demo` series
   record remains at `docs/verification/2026-08-22-acceptance.md`).
 - **Dress rehearsal** (Scene 1 veto + full spine) in 69 s, under the
   four-minute budget (same record).
