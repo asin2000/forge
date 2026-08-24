@@ -35,7 +35,19 @@ a{color:var(--acc);cursor:pointer}
 .clockchip{background:#243040;border-radius:999px;padding:.1rem .7rem;font-size:.8rem}
 .dock{position:fixed;left:0;right:0;bottom:0;background:var(--panel);
 border-top:1px solid var(--line);padding:.45rem 1.2rem .55rem;z-index:10}
-.dock h2{margin:0 0 .3rem;font-size:.8rem}
+.dock h2{margin:0 0 .3rem;font-size:.8rem;display:flex;align-items:center;gap:.6rem}
+.dock.closed .lanes{display:none}
+.docktoggle{background:#243040;color:var(--ink);font-weight:600;font-size:.7rem;
+padding:.05rem .55rem;margin-left:auto}
+body.dockclosed{padding-bottom:56px}
+.fleet{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin:0 0 1rem}
+.fleetchip{background:#243040;border-radius:999px;padding:.15rem .8rem;font-size:.82rem;font-weight:700}
+.vehicle{border:1px solid var(--line);border-radius:6px;padding:.15rem .55rem;font-size:.74rem;
+background:#12181e;cursor:default;text-align:center;line-height:1.35}
+.vehicle.mc{border-color:#1e3328}.vehicle.mc .vstat{color:var(--ok)}
+.vehicle.nmc{border-color:var(--warn);cursor:pointer}.vehicle.nmc .vstat{color:var(--warn)}
+.vehicle.blocked{border-color:var(--bad);cursor:pointer}.vehicle.blocked .vstat{color:var(--bad)}
+.vehicle .vstat{font-weight:700}
 .lanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.6rem}
 .lane{border:1px solid var(--line);border-radius:8px;padding:.55rem .7rem;background:#12181e;cursor:pointer}
 .lane.selected{outline:2px solid var(--acc)}
@@ -56,6 +68,7 @@ border-top:1px solid var(--line);padding:.45rem 1.2rem .55rem;z-index:10}
 <span class="clockchip">Day <span id="clockday">—</span></span>
 <span class="mut" id="operator"></span>
 </div>
+<div class="fleet" id="fleet"></div>
 <div class="grid">
 <div>
   <div class="panel"><h2>Operator Controls (HUM-3)</h2>
@@ -76,7 +89,9 @@ border-top:1px solid var(--line);padding:.45rem 1.2rem .55rem;z-index:10}
 <div id="detail"><div class="panel mut">Select a workflow.</div></div>
 </div>
 <div class="panel"><h2>Live Agent Activity</h2><div id="activity" class="mut">—</div></div>
-<div class="dock"><h2>Agent Operations <span class="mut" id="lanefilter"></span></h2>
+<div class="dock" id="dock"><h2>Agent Operations <span class="mut" id="lanefilter"></span>
+  <span class="mut" id="docksum"></span>
+  <button class="docktoggle" onclick="toggleDock()" id="dockbtn">Collapse &#9662;</button></h2>
  <div id="agentstrip" class="lanes mut">—</div></div>
 <script>
 let CUR=null;let FILTER=null;let LANEWAS={};
@@ -101,6 +116,17 @@ async function loadCatalog(){
 async function loadClock(){
   try{const c=await j('/api/clock');document.getElementById('clockday').textContent=c.logical_time}catch(e){}
 }
+async function loadFleet(){
+  const f=await j('/api/fleet');
+  document.getElementById('fleet').innerHTML=
+   `<span class="fleetchip">FLEET READINESS ${f.readiness.capable}/${f.readiness.total} MC</span>`+
+   f.vehicles.map(v=>{
+    const cls=v.status==='MISSION_CAPABLE'?'mc':v.status==='BLOCKED'?'blocked':'nmc';
+    const label=v.status==='MISSION_CAPABLE'?'MC':v.status==='BLOCKED'?'BLOCKED':'NMC';
+    const open=v.workflow_id?` onclick="show('${v.workflow_id}')" title="${esc(v.workflow_status)} · ${esc(v.workflow_id)}"`:'';
+    return `<span class="vehicle ${cls}"${open}>${v.equipment_id.slice(5)}<br><span class="vstat">${label}</span></span>`;
+   }).join('');
+}
 async function loadActivity(){
   const feed=await j('/api/activity?limit=25'+(FILTER?'&agent='+FILTER:''));
   document.getElementById('activity').innerHTML=feed.length?`<table>
@@ -113,6 +139,8 @@ async function loadActivity(){
 // a new event lands. Calm fleet = calm wall.
 async function loadLanes(){
   const lanes=await j('/api/agents/now');
+  const working=lanes.filter(l=>l.now.kind==='processing'||l.now.kind==='executing').length;
+  document.getElementById('docksum').textContent=working?('· '+working+' working'):'· all quiet';
   document.getElementById('agentstrip').classList.remove('mut');
   document.getElementById('agentstrip').innerHTML=lanes.map(l=>{
     const was=LANEWAS[l.definition_id]||{};
@@ -134,6 +162,17 @@ async function loadLanes(){
 function laneFilter(d){FILTER=FILTER===d?null:d;
   document.getElementById('lanefilter').textContent=FILTER?('· feed filtered: '+FILTER):'';
   loadLanes();loadActivity();}
+function applyDock(){
+  const open=localStorage.getItem('forge-dock')!=='closed';
+  document.getElementById('dock').classList.toggle('closed',!open);
+  document.body.classList.toggle('dockclosed',!open);
+  document.getElementById('dockbtn').innerHTML=open?'Collapse &#9662;':'Expand &#9652;';
+}
+function toggleDock(){
+  const open=localStorage.getItem('forge-dock')!=='closed';
+  localStorage.setItem('forge-dock',open?'closed':'open');
+  applyDock();
+}
 async function whoami(){
   try{const w=await j('/api/whoami');document.getElementById('operator').textContent='operator: '+w.approver_identity}catch(e){}
 }
@@ -214,7 +253,7 @@ async function instanceAction(iid,action){
 }
 document.getElementById('op-equip').innerHTML=Array.from({length:12},(_,n)=>{
   const id='GX12-'+String(n+1).padStart(2,'0');return `<option>${id}</option>`}).join('');
-whoami();loadClock();loadWorkflows();loadCatalog();loadActivity();loadLanes();
-setInterval(()=>{loadWorkflows();loadCatalog();loadActivity();loadClock()},5000);
+applyDock();whoami();loadClock();loadFleet();loadWorkflows();loadCatalog();loadActivity();loadLanes();
+setInterval(()=>{loadFleet();loadWorkflows();loadCatalog();loadActivity();loadClock()},5000);
 setInterval(loadLanes,3000);
 </script></body></html>"""
