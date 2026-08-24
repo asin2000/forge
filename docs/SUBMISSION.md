@@ -11,8 +11,9 @@ this in sync with `README.md`; the README is authoritative for setup.
 - **Repository:** https://github.com/asin2000/forge (private — **must be
   shared** with `testing@devpost.com` and `cloudhackathons@google.com` before
   SUB-7; see Open items — grant collaborator access on GitHub and confirm)
-- **Frozen artifact:** git tag `v1.3-demo` (commit `7e19d47`; 10/10 live
-  acceptance + rehearsals in `docs/verification/2026-08-23-v13-acceptance.md`)
+- **Frozen artifact:** git tag `v1.3-demo.3` (commit `18ec4b3`; 10/10 live
+  acceptance runs + rehearsals in `docs/verification/2026-08-23-v13-acceptance.md`
+  and `docs/verification/2026-08-24-day10-console.md`)
 - **Hosted URL:** the operator console (read-only except the audited HUM-1
   approvals and HUM-3 operator controls) runs on Cloud Run behind IAM
   (`--no-allow-unauthenticated`), so it is not publicly reachable by
@@ -109,7 +110,9 @@ vendor bulletin are synthetic fixtures under `data/` (SUB-5).
 
 ```mermaid
 flowchart TB
-    NMC[NMC event] --> ORC[Readiness Orchestrator<br/>no domain work]
+    OPR([Authenticated operator]) -->|Cloud Run IAM| HUM[Operator console<br/>HUM-1 approvals · HUM-3 start/cancel/<br/>clock/anomalies · agent lanes · fleet strip]
+    HUM -->|nmc_event start · approval_decision| ORC[Readiness Orchestrator<br/>no domain work]
+    NMC[NMC event] --> ORC
     ORC -->|work_package_assignment| MNT[Maintenance]
     ORC -->|work_package_assignment| SUP[Supply]
     ORC -->|work_package_assignment| WKF[Workforce]
@@ -117,14 +120,14 @@ flowchart TB
     SUP -->|sourcing report| SAF
     WKF -->|roster| SAF
     SAF -->|validation verdict| ORC
-    ORC -->|approval_request| HUM[Human approval surface<br/>Cloud Run IAM]
-    HUM -->|approval_decision| ORC
-    DOC[External vendor bulletin] --> CT[Cyber Trust<br/>quarantine-first]
+    ORC -->|approval_request HUM-2 record| HUM
+    DOC[External vendor bulletin] -->|POST /ingest| CT[Cyber Trust<br/>quarantine-first]
+    HUM -.HUM-3 bulletin injection.-> CT
     CT -->|GCS quarantine| GCS[(Quarantine bucket)]
     CT -->|screen| MA[Model Armor]
     CT -->|classify| CLF[Tool-less classifier]
     CT -->|quarantine_verdict + safe metadata| SAF
-    ORC <--> FS[(Firestore:<br/>state, inbox/outbox,<br/>audit, Logical Clock)]
+    ORC <--> FS[(Firestore:<br/>state, inbox/outbox, audit,<br/>registry, Logical Clock)]
     ORC <--> PS{{Pub/Sub bus<br/>ordering keys + DLQ}}
     ORC -.OTel one trace.-> CTr[(Cloud Trace)]
     CLK[Cloud Scheduler heartbeat] -.resume after 21 days.-> ORC
