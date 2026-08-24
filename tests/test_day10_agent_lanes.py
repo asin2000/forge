@@ -270,3 +270,34 @@ def test_fleet_blocked_workflow_surfaces_blocked():
 def test_page_carries_fleet_strip_and_collapsible_dock():
     for marker in ("/api/fleet", "FLEET READINESS", "toggleDock", "applyDock", "docksum"):
         assert marker in PAGE_HTML
+
+
+# --------------------------------------------------- presentation layer (v1.3)
+
+
+def test_meta_endpoint_carries_project_id_for_the_trace_link():
+    db = ready_db()
+    client = TestClient(create_app(db, verifier=lambda token: OPERATOR, project_id="demo-project"))
+    assert client.get("/api/meta").json() == {"project_id": "demo-project"}
+    assert make_client(db).get("/api/meta").json() == {"project_id": ""}
+
+
+def test_page_carries_the_mission_story_and_hero_moments():
+    for marker in (
+        "storyPanel",
+        "NON-MISSION-CAPABLE",
+        "showBanner",
+        "HOSTILE BULLETIN QUARANTINED",
+        "SAFETY VETO — UNAUTHORIZED ACTION BLOCKED",
+        "RESERVE DEPLOYED",
+        "21 DAYS ELAPSED — WORKFLOW RESUMED",
+        "OPERATIONAL READINESS RESTORED",
+        "Simulate hostile vendor bulletin",
+        "Synthetic Demo Controls",
+        "Inject agent failure",
+        "View distributed trace",
+        "operator authenticated",
+        "vetoCallout",
+        "prefers-reduced-motion",
+    ):
+        assert marker in PAGE_HTML

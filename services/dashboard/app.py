@@ -96,6 +96,7 @@ def create_app(
     iap_verifier: Any = None,
     publish: Any = None,
     ingest_forward: Any = None,
+    project_id: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="FORGE dashboard", docs_url=None, redoc_url=None)
     verify: dict[str, Any] = {}
@@ -281,6 +282,13 @@ def create_app(
     @app.get("/api/clock")
     def clock() -> dict[str, int]:
         return {"logical_time": read_clock(db)}
+
+    @app.get("/api/meta")
+    def meta() -> dict[str, str]:
+        """Read-only deployment metadata: the project id lets the UI link a
+        workflow's trace to the Cloud Trace console (entrant review: a
+        visible View-distributed-trace affordance)."""
+        return {"project_id": project_id or ""}
 
     @app.get("/api/activity")
     def activity(limit: int = 30, agent: str | None = None) -> list[dict[str, Any]]:
@@ -704,4 +712,5 @@ def production_app() -> FastAPI:  # pragma: no cover - Cloud Run entrypoint
         firestore.Client(project=project),
         publish=lambda message, key: publisher.publish(topic, message, key),
         ingest_forward=ingest_forward,
+        project_id=project,
     )
