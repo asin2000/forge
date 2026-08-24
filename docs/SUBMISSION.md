@@ -109,7 +109,9 @@ vendor bulletin are synthetic fixtures under `data/` (SUB-5).
 
 ```mermaid
 flowchart TB
-    NMC[NMC event] --> ORC[Readiness Orchestrator<br/>no domain work]
+    OPR([Authenticated operator]) -->|Cloud Run IAM| HUM[Operator console<br/>HUM-1 approvals · HUM-3 start/cancel/<br/>clock/anomalies · agent lanes · fleet strip]
+    HUM -->|nmc_event start · approval_decision| ORC[Readiness Orchestrator<br/>no domain work]
+    NMC[NMC event] --> ORC
     ORC -->|work_package_assignment| MNT[Maintenance]
     ORC -->|work_package_assignment| SUP[Supply]
     ORC -->|work_package_assignment| WKF[Workforce]
@@ -117,14 +119,14 @@ flowchart TB
     SUP -->|sourcing report| SAF
     WKF -->|roster| SAF
     SAF -->|validation verdict| ORC
-    ORC -->|approval_request| HUM[Human approval surface<br/>Cloud Run IAM]
-    HUM -->|approval_decision| ORC
-    DOC[External vendor bulletin] --> CT[Cyber Trust<br/>quarantine-first]
+    ORC -->|approval_request HUM-2 record| HUM
+    DOC[External vendor bulletin] -->|POST /ingest| CT[Cyber Trust<br/>quarantine-first]
+    HUM -.HUM-3 bulletin injection.-> CT
     CT -->|GCS quarantine| GCS[(Quarantine bucket)]
     CT -->|screen| MA[Model Armor]
     CT -->|classify| CLF[Tool-less classifier]
     CT -->|quarantine_verdict + safe metadata| SAF
-    ORC <--> FS[(Firestore:<br/>state, inbox/outbox,<br/>audit, Logical Clock)]
+    ORC <--> FS[(Firestore:<br/>state, inbox/outbox, audit,<br/>registry, Logical Clock)]
     ORC <--> PS{{Pub/Sub bus<br/>ordering keys + DLQ}}
     ORC -.OTel one trace.-> CTr[(Cloud Trace)]
     CLK[Cloud Scheduler heartbeat] -.resume after 21 days.-> ORC
