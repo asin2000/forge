@@ -469,6 +469,7 @@ requirements:
       - services/dashboard/ui.py
     verified_by:
       - tests/test_day6_dashboard.py
+      - tests/test_day10_agent_lanes.py
     verification_method: demonstration
   REG-5:
     implemented_by:

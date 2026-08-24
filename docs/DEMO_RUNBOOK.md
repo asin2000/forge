@@ -56,9 +56,14 @@ Trace waterfall you can refresh after the spine completes.
 
 1. **Start** — in Operator Controls, pick the equipment, keep
    `DSC-0042`, click **Report NMC**. Narrate: *"That click injected the
-   same NMC event the flightline would emit — nothing scripted."* Watch the
-   Live Agent Activity feed: DECOMPOSED, DOMAIN_OUTPUT_PRODUCED,
-   ACTION_APPROVED scroll by as the agents actually work.
+   same NMC event the flightline would emit — nothing scripted."* Then
+   point at the **Agent Operations wall**: the orchestrator's lane pulses
+   first (decomposing), then maintenance and supply light up *in
+   parallel*, then safety — the org chart executing live. One line to say:
+   *"Each lane renders only governed state — claims, work packages, the
+   audit trail. The wall can't show anything the audit trail can't
+   prove."* The Live Agent Activity feed below carries the merged stream
+   (click a lane to filter it to that agent).
 2. **Inject the poisoned bulletin** — open the workflow, click **Inject
    poisoned bulletin**. Narrate the audit trail rows: DOCUMENT_QUARANTINED
    first (quarantine-first, SEC-1), then the screening verdict. Say it

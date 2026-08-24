@@ -33,6 +33,20 @@ li{margin:.15rem 0}.mut{color:var(--mut)}pre{white-space:pre-wrap;font-size:.8re
 a{color:var(--acc);cursor:pointer}
 .headrow{display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap}
 .clockchip{background:#243040;border-radius:999px;padding:.1rem .7rem;font-size:.8rem}
+.lanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.6rem}
+.lane{border:1px solid var(--line);border-radius:8px;padding:.55rem .7rem;background:#12181e;cursor:pointer}
+.lane.selected{outline:2px solid var(--acc)}
+.lane.working{border-color:var(--acc);animation:lanepulse 1.6s ease-in-out infinite}
+@keyframes lanepulse{0%,100%{box-shadow:0 0 0 0 rgba(111,163,199,0)}50%{box-shadow:0 0 0 4px rgba(111,163,199,.25)}}
+.lane.flash{animation:laneflash 1.2s ease-out 1}
+@keyframes laneflash{0%{box-shadow:0 0 0 4px rgba(95,191,139,.55)}100%{box-shadow:0 0 0 0 rgba(95,191,139,0)}}
+.lane.failedlane{border-color:var(--bad)}
+.lane .role{font-weight:700;font-size:.85rem}
+.lane .nowline{font-size:.78rem;min-height:2.3em;margin:.25rem 0}
+.lane .mini{font-size:.68rem;color:var(--mut);border-top:1px solid var(--line);padding-top:.25rem}
+.mini .new{animation:slidein .35s ease-out 1}
+@keyframes slidein{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){.lane,.mini .new{animation:none}}
 </style></head><body>
 <div class="headrow">
 <h1>FORGE Readiness Console <span class="mut">· governed operator console (HUM-1 / HUM-3)</span></h1>
@@ -58,11 +72,14 @@ a{color:var(--acc);cursor:pointer}
 </div>
 <div id="detail"><div class="panel mut">Select a workflow.</div></div>
 </div>
+<div class="panel"><h2>Agent Operations <span class="mut" id="lanefilter"></span></h2>
+ <div id="agentstrip" class="lanes mut">—</div></div>
 <div class="panel"><h2>Live Agent Activity</h2><div id="activity" class="mut">—</div></div>
 <script>
-let CUR=null;
+let CUR=null;let FILTER=null;let LANEWAS={};
 async function j(u,opt){const r=await fetch(u,opt);if(!r.ok)throw new Error(await r.text());return r.json()}
 function tag(v){return `<span class="tag ${v}">${v}</span>`}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';')}
 async function loadWorkflows(){
   const list=await j('/api/workflows');
   document.getElementById('wfs').innerHTML=list.map(w=>
@@ -82,11 +99,38 @@ async function loadClock(){
   try{const c=await j('/api/clock');document.getElementById('clockday').textContent=c.logical_time}catch(e){}
 }
 async function loadActivity(){
-  const feed=await j('/api/activity?limit=25');
+  const feed=await j('/api/activity?limit=25'+(FILTER?'&agent='+FILTER:''));
   document.getElementById('activity').innerHTML=feed.length?`<table>
    <tr><th>Observed</th><th>Day</th><th>Agent</th><th>Kind</th><th>Reason</th><th>Workflow</th><th>State</th></tr>
    ${feed.map(e=>`<tr><td class="mut">${e.observed_at.slice(11,19)}</td><td>${e.effective_at}</td><td>${e.agent_identity}</td><td>${e.event_kind}</td><td>${e.reason_code}</td><td class="mut">${e.workflow_id}</td><td>${e.state_after?tag(e.state_after):''}</td></tr>`).join('')}</table>`:'—';
 }
+// Agent Operations lanes: every rendered fact is governed state (claims,
+// packages, registry, audit trail); motion is EVENT-DRIVEN only — pulse
+// while a claim is live, one flash when work completes, one slide-in when
+// a new event lands. Calm fleet = calm wall.
+async function loadLanes(){
+  const lanes=await j('/api/agents/now');
+  document.getElementById('agentstrip').classList.remove('mut');
+  document.getElementById('agentstrip').innerHTML=lanes.map(l=>{
+    const was=LANEWAS[l.definition_id]||{};
+    const working=l.now.kind==='processing'||l.now.kind==='executing';
+    const flash=was.working&&!working&&l.now.kind!=='failed';
+    const top=l.recent[0];const newEvt=top&&was.top!==top.observed_at+top.reason_code;
+    LANEWAS[l.definition_id]={working,top:top?top.observed_at+top.reason_code:was.top};
+    const cls=['lane',working?'working':'',flash?'flash':'',
+      l.now.kind==='failed'?'failedlane':'',FILTER===l.definition_id?'selected':''].join(' ');
+    return `<div class="${cls}" onclick="laneFilter('${l.definition_id}')">
+     <div class="role">${esc(l.definition_id.replace('forge-',''))}
+       <span class="mut">${esc(l.acting_instance_id||'')}</span></div>
+     <div class="nowline">${working?'&#9679; ':''}${esc(l.now.text)}
+       ${l.now.workflow_id?`<span class="mut">· ${esc(l.now.workflow_id)}</span>`:''}</div>
+     <div class="mini">${l.recent.map((e,n)=>`<div${n===0&&newEvt?' class="new"':''}>
+       ${e.observed_at.slice(11,19)} ${esc(e.reason_code)}</div>`).join('')||'&mdash;'}</div>
+    </div>`}).join('');
+}
+function laneFilter(d){FILTER=FILTER===d?null:d;
+  document.getElementById('lanefilter').textContent=FILTER?('· feed filtered: '+FILTER):'';
+  loadLanes();loadActivity();}
 async function whoami(){
   try{const w=await j('/api/whoami');document.getElementById('operator').textContent='operator: '+w.approver_identity}catch(e){}
 }
@@ -167,6 +211,7 @@ async function instanceAction(iid,action){
 }
 document.getElementById('op-equip').innerHTML=Array.from({length:12},(_,n)=>{
   const id='GX12-'+String(n+1).padStart(2,'0');return `<option>${id}</option>`}).join('');
-whoami();loadClock();loadWorkflows();loadCatalog();loadActivity();
+whoami();loadClock();loadWorkflows();loadCatalog();loadActivity();loadLanes();
 setInterval(()=>{loadWorkflows();loadCatalog();loadActivity();loadClock()},5000);
+setInterval(loadLanes,3000);
 </script></body></html>"""
