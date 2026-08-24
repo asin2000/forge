@@ -229,3 +229,44 @@ def test_page_carries_the_agent_lanes():
         'class="dock"',
     ):
         assert marker in PAGE_HTML
+
+
+# ---------------------------------------------------------------- fleet strip
+
+
+def test_fleet_all_mission_capable_when_no_live_workflows():
+    db = FakeFirestore()
+    registry.load_registry(db)
+    layout.clock_ref(db).set({"logical_time": 0})
+    fleet = make_client(db).get("/api/fleet").json()
+    assert fleet["readiness"] == {"capable": 12, "total": 12}
+    assert len(fleet["vehicles"]) == 12
+    assert all(v["status"] == "MISSION_CAPABLE" for v in fleet["vehicles"])
+
+
+def test_fleet_live_workflow_marks_vehicle_nmc_and_terminal_restores_it():
+    db = ready_db()  # workflow WF on GX12-07
+    client = make_client(db)
+    by_id = {v["equipment_id"]: v for v in client.get("/api/fleet").json()["vehicles"]}
+    assert by_id["GX12-07"]["status"] == "IN_RECOVERY"
+    assert by_id["GX12-07"]["workflow_id"] == WF
+    assert by_id["GX12-01"]["status"] == "MISSION_CAPABLE"
+    assert client.get("/api/fleet").json()["readiness"]["capable"] == 11
+    client.post(f"/api/workflows/{WF}/cancel", headers=AUTHED, json={})
+    fleet = client.get("/api/fleet").json()
+    assert fleet["readiness"]["capable"] == 12  # cancelled recovery frees the tile
+
+
+def test_fleet_blocked_workflow_surfaces_blocked():
+    db = ready_db()
+    doc = layout.workflow_ref(db, WF).get().to_dict()
+    layout.workflow_ref(db, WF).set(
+        layout.validate_state_doc({**doc, "status": "BLOCKED_AGENT_FAILURE", "due_at": None})
+    )
+    by_id = {v["equipment_id"]: v for v in make_client(db).get("/api/fleet").json()["vehicles"]}
+    assert by_id["GX12-07"]["status"] == "BLOCKED"
+
+
+def test_page_carries_fleet_strip_and_collapsible_dock():
+    for marker in ("/api/fleet", "FLEET READINESS", "toggleDock", "applyDock", "docksum"):
+        assert marker in PAGE_HTML

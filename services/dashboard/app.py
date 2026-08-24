@@ -314,6 +314,45 @@ def create_app(
         events.sort(key=lambda e: (e["observed_at"], e["workflow_id"]), reverse=True)
         return events[:limit]
 
+    @app.get("/api/fleet")
+    def fleet() -> dict[str, Any]:
+        """Fleet readiness strip: per-vehicle status DERIVED from workflow
+        state alone — a vehicle with a live recovery workflow is NMC (IN
+        RECOVERY; BLOCKED surfaces for attention), otherwise MISSION
+        CAPABLE. No stored vehicle flag exists anywhere; like every console
+        surface, the strip renders only what the audit substrate proves."""
+        live_by_equipment: dict[str, dict[str, Any]] = {}
+        for workflow in _docs(db.collection("workflows")):
+            if workflow.get("status") in state.TERMINAL_STATES:
+                continue
+            equipment = workflow.get("equipment_id")
+            # oldest live recovery wins the tile (deterministic by id)
+            if equipment and (
+                equipment not in live_by_equipment
+                or workflow["workflow_id"] < live_by_equipment[equipment]["workflow_id"]
+            ):
+                live_by_equipment[equipment] = workflow
+        vehicles = []
+        for n in range(1, 13):
+            equipment_id = f"GX12-{n:02d}"
+            active = live_by_equipment.get(equipment_id)
+            if active is None:
+                status = "MISSION_CAPABLE"
+            elif active["status"] == "BLOCKED_AGENT_FAILURE":
+                status = "BLOCKED"
+            else:
+                status = "IN_RECOVERY"
+            vehicles.append(
+                {
+                    "equipment_id": equipment_id,
+                    "status": status,
+                    "workflow_id": active["workflow_id"] if active else None,
+                    "workflow_status": active["status"] if active else None,
+                }
+            )
+        capable = sum(1 for v in vehicles if v["status"] == "MISSION_CAPABLE")
+        return {"readiness": {"capable": capable, "total": len(vehicles)}, "vehicles": vehicles}
+
     @app.get("/api/agents/now")
     def agents_now() -> list[dict[str, Any]]:
         """Per-agent lanes: what each agent is doing RIGHT NOW, composed
