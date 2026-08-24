@@ -11,8 +11,9 @@ this in sync with `README.md`; the README is authoritative for setup.
 - **Repository:** https://github.com/asin2000/forge (private — **must be
   shared** with `testing@devpost.com` and `cloudhackathons@google.com` before
   SUB-7; see Open items — grant collaborator access on GitHub and confirm)
-- **Frozen artifact:** git tag `v1.3-demo` (commit `7e19d47`; 10/10 live
-  acceptance + rehearsals in `docs/verification/2026-08-23-v13-acceptance.md`)
+- **Frozen artifact:** git tag `v1.3-demo.3` (commit `18ec4b3`; 10/10 live
+  acceptance runs + rehearsals in `docs/verification/2026-08-23-v13-acceptance.md`
+  and `docs/verification/2026-08-24-day10-console.md`)
 - **Hosted URL:** the operator console (read-only except the audited HUM-1
   approvals and HUM-3 operator controls) runs on Cloud Run behind IAM
   (`--no-allow-unauthenticated`), so it is not publicly reachable by
