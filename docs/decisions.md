@@ -689,3 +689,23 @@ cleared on restore); HUM-3's drain wording now names exactly which stale
 paths audit and which consume silently; stale doc lines fixed (layout
 docstring, SUBMISSION closing line — which also still listed the Google
 credits item the entrant ordered closed; removed).
+
+## Day 10 — Agent Operations lanes (entrant concept, 2026-08-24)
+
+The entrant sketched it in PowerPoint over a dashboard screenshot: a box
+per agent at the bottom, each a live visualizer of that agent executing.
+Design decision that makes it FORGE rather than a demo animation: **every
+pixel in a lane derives from governed state** — the live bus claim/lease
+(the system's literal unit of "executing this message now"), ASSIGNED work
+packages (contract-bounded objectives), registry instance state, and the
+audit trail. Metadata-only: no prompts, no model prose, no audit `detail`
+fields (operator emails stay out of the lanes). One read-only endpoint
+(`/api/agents/now`), six definition lanes with the acting instance shown
+(the workforce lane visibly swaps to the reserve on failover), click
+filters the activity feed to that agent. Motion is EVENT-DRIVEN only
+(entrant chose the middle path): pulse while a claim is live, one green
+flash on completion, one slide-in per new ticker event, and
+`prefers-reduced-motion` disables all of it. New model-adjacent text added
+by this feature is HTML-escaped at render (`esc()`), unlike the inherited
+surfaces. Read-side only: no agent code touched, no IAM change, no
+contract change; acceptance re-run regardless per the reset rule.

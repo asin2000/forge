@@ -127,8 +127,8 @@ operator-console amendment (HUM-3) reset the acceptance count per the
 entrant's rule, and the full live acceptance re-ran on the new tag
 (baseline history: `v1.2-demo` … `v1.2-demo.3`). CI enforces eight gates on
 every PR (lint, contracts+ICD-3, unit, real-emulator integration, secrets,
-dead-code, config/registry+residency, traceability); the suite is **287
-tests (266 unit + 21 real-client emulator)** and traceability runs in
+dead-code, config/registry+residency, traceability); the suite is **304
+tests (283 unit + 21 real-client emulator)** and traceability runs in
 strict mode.
 
 Live acceptance on the frozen commit, verbatim captures in

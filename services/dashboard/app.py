@@ -65,6 +65,20 @@ def _docs(collection: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _definition_for_identity(identity: str) -> str | None:
+    """Map an audit/claim identity to its registry definition: instance ids
+    (``agent-<role>-NN``) and service identities (``forge-<role>``) belong to
+    agents; the operator surface and the deployer are not agents."""
+    if identity in ("forge-approval-surface", "forge-deployer"):
+        return None
+    if identity.startswith("agent-"):
+        role = identity.removeprefix("agent-").rsplit("-", 1)[0]
+        return f"forge-{role.replace('_', '-')}"
+    if identity.startswith("forge-"):
+        return identity
+    return None
+
+
 def derive_health(last_heartbeat_at: str | None, *, now: str | None = None) -> str:
     """REG-1: health is DERIVED from heartbeat staleness, never stored."""
     if not last_heartbeat_at:
@@ -269,16 +283,20 @@ def create_app(
         return {"logical_time": read_clock(db)}
 
     @app.get("/api/activity")
-    def activity(limit: int = 30) -> list[dict[str, Any]]:
+    def activity(limit: int = 30, agent: str | None = None) -> list[dict[str, Any]]:
         """Live Agent Activity: newest-first fleet-wide audit feed — a pure
         projection of the AUD-2 trail (workflows plus the system audit
-        workflows), no new data recorded anywhere."""
+        workflows), no new data recorded anywhere. ``agent`` filters to one
+        definition's identities (the lane click-through)."""
         limit = max(1, min(int(limit), 100))
         ids = [w["workflow_id"] for w in _docs(db.collection("workflows"))]
         ids += [CLOCK_AUDIT_WORKFLOW, registry.REGISTRY_AUDIT_WORKFLOW]
         events: list[dict[str, Any]] = []
         for workflow_id in ids:
             for e in state.reconstruct_audit_trail(db, workflow_id)[-limit:]:
+                identity = e["payload"]["agent_identity"]
+                if agent and _definition_for_identity(identity) != agent:
+                    continue
                 events.append(
                     {
                         "workflow_id": workflow_id,
@@ -286,7 +304,7 @@ def create_app(
                         "effective_at": e["payload"]["effective_at"],
                         "event_kind": e["payload"]["event_kind"],
                         "reason_code": e["payload"]["reason_code"],
-                        "agent_identity": e["payload"]["agent_identity"],
+                        "agent_identity": identity,
                         "state_after": e["payload"].get("state_after"),
                         # DAT-2: labels ride the feed exactly as in the trail
                         "data_origin": e["envelope"].get("data_origin"),
@@ -295,6 +313,144 @@ def create_app(
                 )
         events.sort(key=lambda e: (e["observed_at"], e["workflow_id"]), reverse=True)
         return events[:limit]
+
+    @app.get("/api/agents/now")
+    def agents_now() -> list[dict[str, Any]]:
+        """Per-agent lanes: what each agent is doing RIGHT NOW, composed
+        ONLY from governed state — registry instances, live bus claims
+        (unexpired leases), ASSIGNED work packages, and the audit trail.
+        Metadata-only: no prompts, no model text, no audit detail fields —
+        the lane can render nothing the trail cannot prove."""
+        current = now_iso()
+        live = [
+            w
+            for w in _docs(db.collection("workflows"))
+            if w.get("status") not in state.TERMINAL_STATES
+        ]
+        # live claims: an inbox marker still processing under an unexpired
+        # lease IS the system's unit of "executing this message right now"
+        claims: dict[str, dict[str, Any]] = {}
+        for workflow in live:
+            wf_ref = layout.workflow_ref(db, workflow["workflow_id"])
+            for record in _docs(wf_ref.collection("inbox")):
+                if record.get("status") != "processing":
+                    continue
+                if record.get("lease_expires_at", "") <= current:
+                    continue
+                definition_id = _definition_for_identity(record.get("consumer_identity", ""))
+                if definition_id is None:
+                    continue
+                snapshot = layout.outbox_ref(
+                    db, workflow["workflow_id"], record.get("event_id", "")
+                ).get()
+                outbox_doc = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+                schema = (
+                    outbox_doc["message"]["envelope"].get("schema_version") if outbox_doc else None
+                )
+                claims[definition_id] = {
+                    "workflow_id": workflow["workflow_id"],
+                    "schema_version": schema,
+                }
+        # ASSIGNED packages by owner instance (objective is the
+        # contract-bounded orchestrator-authored field the console already
+        # shows on approval cards — never free model prose)
+        assigned: dict[str, dict[str, Any]] = {}
+        for workflow in live:
+            packages = layout.workflow_ref(db, workflow["workflow_id"]).collection("work_packages")
+            for wp in _docs(packages):
+                if wp.get("status") != "ASSIGNED":
+                    continue
+                assigned[wp.get("owner_instance_id", "")] = {
+                    "work_package_id": wp["work_package_id"],
+                    "objective": (wp.get("objective") or "")[:140],
+                    "workflow_id": workflow["workflow_id"],
+                    "since": wp.get("reassigned_observed_at") or wp.get("assigned_observed_at"),
+                }
+        # last 3 audit events per definition (same projection as the feed,
+        # minus detail — the lane ticker)
+        recent: dict[str, list[dict[str, Any]]] = {}
+        trail_ids = [w["workflow_id"] for w in _docs(db.collection("workflows"))]
+        trail_ids += [CLOCK_AUDIT_WORKFLOW, registry.REGISTRY_AUDIT_WORKFLOW]
+        tagged: list[tuple[str, dict[str, Any]]] = []
+        for workflow_id in trail_ids:
+            for e in state.reconstruct_audit_trail(db, workflow_id)[-30:]:
+                definition_id = _definition_for_identity(e["payload"]["agent_identity"])
+                if definition_id is None:
+                    continue
+                tagged.append(
+                    (
+                        definition_id,
+                        {
+                            "observed_at": e["payload"]["observed_at"],
+                            "event_kind": e["payload"]["event_kind"],
+                            "reason_code": e["payload"]["reason_code"],
+                            "workflow_id": workflow_id,
+                        },
+                    )
+                )
+        tagged.sort(key=lambda pair: pair[1]["observed_at"], reverse=True)
+        for definition_id, event in tagged:
+            bucket = recent.setdefault(definition_id, [])
+            if len(bucket) < 3:
+                bucket.append(event)
+
+        by_definition: dict[str, list[dict[str, Any]]] = {}
+        for inst in _docs(db.collection("agent_instances")):
+            by_definition.setdefault(inst["definition_id"], []).append(
+                {
+                    "instance_id": inst["instance_id"],
+                    "state": inst["state"],
+                    "health": derive_health(inst.get("last_heartbeat_at")),
+                }
+            )
+        lanes = []
+        for definition in _docs(db.collection("agent_registry")):
+            agent_id = definition["agent_id"]
+            instances = sorted(by_definition.get(agent_id, []), key=lambda i: i["instance_id"])
+            acting = next(
+                (
+                    i
+                    for preferred in ("ACTIVE", "IDLE", "RESERVE")
+                    for i in instances
+                    if i["state"] == preferred
+                ),
+                instances[0] if instances else None,
+            )
+            claim = claims.get(agent_id)
+            package = next(
+                (assigned[i["instance_id"]] for i in instances if i["instance_id"] in assigned),
+                None,
+            )
+            if claim is not None:
+                now = {
+                    "kind": "processing",
+                    "text": f"Processing {claim['schema_version'] or 'event'}",
+                    "workflow_id": claim["workflow_id"],
+                }
+            elif package is not None:
+                now = {
+                    "kind": "executing",
+                    "text": f"{package['work_package_id']}: {package['objective']}",
+                    "workflow_id": package["workflow_id"],
+                    "since": package["since"],
+                }
+            elif instances and all(i["state"] == "FAILED" for i in instances):
+                now = {"kind": "failed", "text": "FAILED — operator restore required"}
+            elif acting is not None and acting["state"] == "RESERVE":
+                now = {"kind": "reserve", "text": "Standing by (reserve)"}
+            else:
+                now = {"kind": "idle", "text": "Idle"}
+            lanes.append(
+                {
+                    "definition_id": agent_id,
+                    "department_owner": definition.get("department_owner"),
+                    "acting_instance_id": acting["instance_id"] if acting else None,
+                    "instances": instances,
+                    "now": now,
+                    "recent": recent.get(agent_id, []),
+                }
+            )
+        return sorted(lanes, key=lambda lane: lane["definition_id"])
 
     @app.post("/api/workflows")
     def start_workflow(request: Request, body: dict[str, Any]) -> dict[str, Any]:
