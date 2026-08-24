@@ -226,5 +226,6 @@ def test_page_carries_the_agent_lanes():
         "function esc(",
         "lanepulse",
         "laneflash",
+        'class="dock"',
     ):
         assert marker in PAGE_HTML

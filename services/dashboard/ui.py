@@ -10,7 +10,7 @@ PAGE_HTML = """<!doctype html>
 :root{--bg:#101418;--panel:#1a2027;--ink:#e6ebef;--mut:#93a1ad;--line:#2c3640;
 --ok:#5fbf8b;--warn:#d9b45e;--bad:#e08a5e;--acc:#6fa3c7}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);
-font:15px/1.55 system-ui,sans-serif;padding:1.2rem}
+font:15px/1.55 system-ui,sans-serif;padding:1.2rem 1.2rem 185px}
 h1{font-size:1.25rem;margin:0 0 1rem}h2{font-size:1rem;margin:0 0 .5rem;color:var(--acc)}
 .grid{display:grid;gap:1rem;grid-template-columns:280px 1fr}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding: .9rem 1rem;margin-bottom:1rem}
@@ -33,6 +33,9 @@ li{margin:.15rem 0}.mut{color:var(--mut)}pre{white-space:pre-wrap;font-size:.8re
 a{color:var(--acc);cursor:pointer}
 .headrow{display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap}
 .clockchip{background:#243040;border-radius:999px;padding:.1rem .7rem;font-size:.8rem}
+.dock{position:fixed;left:0;right:0;bottom:0;background:var(--panel);
+border-top:1px solid var(--line);padding:.45rem 1.2rem .55rem;z-index:10}
+.dock h2{margin:0 0 .3rem;font-size:.8rem}
 .lanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.6rem}
 .lane{border:1px solid var(--line);border-radius:8px;padding:.55rem .7rem;background:#12181e;cursor:pointer}
 .lane.selected{outline:2px solid var(--acc)}
@@ -72,9 +75,9 @@ a{color:var(--acc);cursor:pointer}
 </div>
 <div id="detail"><div class="panel mut">Select a workflow.</div></div>
 </div>
-<div class="panel"><h2>Agent Operations <span class="mut" id="lanefilter"></span></h2>
- <div id="agentstrip" class="lanes mut">—</div></div>
 <div class="panel"><h2>Live Agent Activity</h2><div id="activity" class="mut">—</div></div>
+<div class="dock"><h2>Agent Operations <span class="mut" id="lanefilter"></span></h2>
+ <div id="agentstrip" class="lanes mut">—</div></div>
 <script>
 let CUR=null;let FILTER=null;let LANEWAS={};
 async function j(u,opt){const r=await fetch(u,opt);if(!r.ok)throw new Error(await r.text());return r.json()}
