@@ -1,10 +1,10 @@
 # FORGE demo runbook — ≤4-minute video
 
 Record against the **tagged runtime**. The deployed Cloud Run fleet on
-`forge-agentic-0821-6418` is built from the acceptance-tagged commit
-**`v1.3-demo` = `7e19d47`** (10/10 + 69 s rehearsal + console rehearsal:
-`docs/verification/2026-08-23-v13-acceptance.md`) — you run everything from
-`main`, whose runtime code is byte-identical to the tag. Do not modify
+`forge-agentic-0821-6418` is built from the current acceptance tag (see
+README → Acceptance & evidence for the tag and its verbatim 10/10 record) —
+you run everything from `main`, whose runtime code is byte-identical to the
+tag. Do not modify
 runtime code or touch the infrastructure during capture.
 
 With HUM-3 the demo is **console-driven**: every beat happens as clicks in
