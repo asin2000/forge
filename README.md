@@ -124,7 +124,7 @@ data is synthetic (SUB-5).
 
 ## Acceptance & evidence
 
-Frozen at tag **`v1.3-demo.4`** (DFT-4; commit `6eddd34`; series began
+Frozen at tag **`v1.3-demo.5`** (DFT-4; commit `371afc8`; series began
 at `v1.3-demo` = `7e19d47`). The v1.3
 operator-console amendment (HUM-3) reset the acceptance count per the
 entrant's rule, and the full live acceptance re-ran on the new tag
@@ -139,7 +139,7 @@ Live acceptance on the frozen commit, verbatim captures in
 
 - **CI-8 — 10/10 consecutive** live spines, NMC → RELEASED, real
   `gemini-3.5-flash` reasoning with two human-gated approvals each — re-run
-  fresh for every v1.3 re-acceptance: three first-attempt, zero-reset
+  fresh for every v1.3 re-acceptance: five first-attempt, zero-reset
   10/10 runs
   (`scripts/acceptance_run.sh`; records in
   `docs/verification/2026-08-23-v13-acceptance.md`,
