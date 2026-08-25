@@ -362,3 +362,117 @@ def test_lane_processing_now_carries_schema_version_field():
     seed_claim(db, consumer="forge-orchestrator", event_id=message_id)
     lane = lanes_by_id(make_client(db))["forge-orchestrator"]
     assert lane["now"]["schema_version"] == "nmc_event.v2"
+
+
+# ------------------------------------------------ registry status coherence
+
+
+def test_agent_activated_audit_stamps_the_real_logical_day():
+    from services.orchestrator.handlers import make_nmc_handler
+    from tests.adk_stub import stub_json
+
+    from forge_common.bus import process_message
+
+    db = ready_db()
+    layout.clock_ref(db).set({"logical_time": 294})
+    nmc = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            schema_version="nmc_event.v2",
+            event_id=deterministic_event_id("day13-nmc", WF),
+            trace_id=TRACE,
+            idempotency_key="idem-day13-nmc",
+        ),
+        "payload": {
+            "equipment_id": "GX12-07",
+            "discrepancy_code": "DSC-0042",
+            "description": "Failed hydraulic actuator on lift assembly",
+            "reported_at": "2026-08-25T09:00:00Z",
+        },
+    }
+    decomposition = stub_json(
+        {
+            "objectives": {
+                "maintenance": "Plan replacement of the failed hydraulic actuator.",
+                "supply": "Source the approved actuator and report shipment status.",
+            }
+        }
+    )
+    assert process_message(
+        db, nmc, make_nmc_handler(db, model=decomposition), consumer_identity="forge-orchestrator"
+    )
+    activated = [
+        e
+        for e in state.reconstruct_audit_trail(db, WF)
+        if e["payload"]["reason_code"] == "AGENT_ACTIVATED"
+    ]
+    assert activated and all(e["payload"]["effective_at"] == 294 for e in activated)
+
+
+def test_completed_package_returns_active_owner_to_idle_audited():
+    """Entrant defect report: agents showed ACTIVE forever after their work
+    completed — the chip and the lane's live view conflicted."""
+    from services.supply.handlers import make_handler as make_supply
+    from tests.adk_stub import stub_json
+
+    from forge_common.bus import process_message
+
+    db = ready_db()
+    layout.clock_ref(db).set({"logical_time": 7})
+    registry.instance_ref(db, "agent-supply-01").set({"state": "ACTIVE"}, merge=True)
+    wp_id = f"wp-supply-{WF.removeprefix('wf-')}"
+    layout.work_package_ref(db, WF, wp_id).set(
+        {
+            "work_package_id": wp_id,
+            "role": "supply",
+            "owner_instance_id": "agent-supply-01",
+            "status": "ASSIGNED",
+            "assignment_seq": 1,
+            "inputs": {"equipment_id": "GX12-07", "discrepancy_code": "DSC-0042"},
+            "assigned_observed_at": now_iso(),
+        }
+    )
+    assignment = {
+        "envelope": build_envelope(
+            workflow_id=WF,
+            work_package_id=wp_id,
+            schema_version="work_package_assignment.v2",
+            event_id=deterministic_event_id("day13-assign", WF),
+            trace_id=TRACE,
+            idempotency_key="idem-day13-assign",
+        ),
+        "payload": {
+            "role": "supply",
+            "objective": "Source the approved actuator and report shipment status.",
+            "assigned_agent_id": "agent-supply-01",
+            "assignment_seq": 1,
+            "inputs": {"equipment_id": "GX12-07", "discrepancy_code": "DSC-0042"},
+        },
+    }
+    sourcing = stub_json(
+        {
+            "part_number": "HYD-ACT-4402",
+            "part_approved": True,
+            "shipment_status": "delayed",
+            "eta_days": 21,
+        }
+    )
+    assert process_message(
+        db, assignment, make_supply(db, sourcing), consumer_identity="forge-supply"
+    )
+    wp = layout.work_package_ref(db, WF, wp_id).get().to_dict()
+    assert wp["status"] == "COMPLETED"
+    assert registry.instance_ref(db, "agent-supply-01").get().to_dict()["state"] == "IDLE"
+    deactivated = [
+        e
+        for e in state.reconstruct_audit_trail(db, WF)
+        if e["payload"]["reason_code"] == "AGENT_DEACTIVATED"
+    ]
+    assert len(deactivated) == 1
+    assert deactivated[0]["payload"]["effective_at"] == 7
+    assert deactivated[0]["envelope"]["trace_id"] == TRACE
+
+
+def test_page_detail_follows_the_poll_and_day_chip_is_back():
+    for marker in ("refreshDetail", "renderDetail", "clockday", "WORKFLOW_CREATED"):
+        assert marker in PAGE_HTML

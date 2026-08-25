@@ -111,6 +111,7 @@ box-shadow:0 6px 30px rgba(0,0,0,.55);animation:bannerin 2.8s ease-in-out 1 forw
 <div id="banners"></div>
 <div class="headrow">
 <h1>FORGE Readiness Console <span class="mut">· governed operator console (HUM-1 / HUM-3)</span></h1>
+<span class="clockchip">Day <span id="clockday">—</span></span>
 <span class="mut" id="operator"></span>
 </div>
 <div class="fleet" id="fleet"></div>
@@ -150,7 +151,7 @@ box-shadow:0 6px 30px rgba(0,0,0,.55);animation:bannerin 2.8s ease-in-out 1 forw
  <div id="agentstrip" class="lanes mut">—</div></div>
 <script>
 let CUR=null;let CURTERMINAL=false;let FILTER=null;let LANEWAS={};let LANES=[];let META={};
-let SEEN=null;let FLEETWAS=null;let AUTOPICKED=false;let CLOCKNOW=0;
+let SEEN=null;let FLEETWAS=null;let AUTOPICKED=false;let CLOCKNOW=0;let DETAILJSON=null;
 // day numbers a VIEWER reads are RELATIVE to the recovery — the global sim
 // clock is monotonic bookkeeping (it is never reset), shown only beside the
 // Advance control
@@ -244,6 +245,7 @@ async function loadCatalog(){
 }
 async function loadClock(){
   try{const c=await j('/api/clock');CLOCKNOW=c.logical_time;
+    document.getElementById('clockday').textContent=c.logical_time;
     document.getElementById('simday').textContent=c.logical_time}catch(e){}
 }
 const BANNER_RULES={'DOCUMENT_QUARANTINED':['HOSTILE BULLETIN QUARANTINED','hostile'],
@@ -346,7 +348,9 @@ function storyPanel(id,d){
     <div><div class="k">Current action</div>${esc(action)}</div>
     <div><div class="k">Owned by</div>${esc(owner)}</div>
     <div><div class="k">Next expected event</div>${esc(nextExpected(s,d.state.due_at))}</div>
-    <div><div class="k">Recovery day</div>Day ${Math.max(0,CLOCKNOW-(d.audit_trail.length?d.audit_trail[0].effective_at:CLOCKNOW))}${d.state.due_at!=null?' · part '+dueIn(d.state.due_at):''}</div>
+    <div><div class="k">Recovery day</div>Day ${(()=>{
+      const created=d.audit_trail.find(e=>e.reason_code==='WORKFLOW_CREATED');
+      return Math.max(0,CLOCKNOW-(created?created.effective_at:CLOCKNOW));})()}${d.state.due_at!=null?' · part '+dueIn(d.state.due_at):''}</div>
    </div></div>`;
 }
 function vetoCallout(d){
@@ -361,9 +365,23 @@ function vetoCallout(d){
    <ul>${why.map(r=>`<li>${esc(r)}</li>`).join('')}</ul></div>`;
 }
 async function show(id){
-  CUR=id;
+  CUR=id;DETAILJSON=null; // force a fresh render for the clicked workflow
+  await refreshDetail();
+}
+// the detail pane FOLLOWS the poll: re-rendered whenever its data actually
+// changes (entrant defect report: the story panel and approval cards went
+// stale against the live workflow list) — unchanged data never re-renders,
+// so buttons stay stable under the cursor between real state changes
+async function refreshDetail(){
+  const id=CUR;if(!id)return;
   const d=await j('/api/workflows/'+id);
   if(CUR!==id)return; // the user selected another workflow while we fetched
+  const serialized=JSON.stringify(d);
+  if(serialized===DETAILJSON)return;
+  DETAILJSON=serialized;
+  renderDetail(id,d);
+}
+function renderDetail(id,d){
   const terminal=['RELEASED','CANCELLED'].includes(d.state.status);
   CURTERMINAL=terminal;
   const approvals=d.pending_approvals.map(p=>`
@@ -449,6 +467,6 @@ async function loadMeta(){try{META=await j('/api/meta')}catch(e){META={}}}
 document.getElementById('op-equip').innerHTML=Array.from({length:12},(_,n)=>{
   const id='GX12-'+String(n+1).padStart(2,'0');return `<option>${id}</option>`}).join('');
 applyDock();loadMeta();whoami();loadClock();loadFleet();loadWorkflows();loadCatalog();loadActivity();loadLanes();
-setInterval(()=>{loadFleet();loadWorkflows();loadCatalog();loadActivity();loadClock()},5000);
+setInterval(()=>{loadFleet();loadWorkflows();loadCatalog();loadActivity();loadClock();refreshDetail()},5000);
 setInterval(loadLanes,3000);
 </script></body></html>"""

@@ -262,6 +262,7 @@ def claim_work_package(
     objective: str = "",
     inputs: dict[str, Any] | None = None,
     trace_id: str | None = None,
+    effective_at: int = 0,
 ) -> None:
     """Create the exclusive-ownership record for a work package (ORC-1).
 
@@ -294,7 +295,10 @@ def claim_work_package(
             reason_code="AGENT_ACTIVATED",
             input_obj={"instance_id": instance_id, "work_package_id": work_package_id},
             output_obj={"state": "ACTIVE"},
-            effective_at=0,
+            # the caller reads the Logical Clock BEFORE the transaction and
+            # passes the day in — a 0 here mis-sorted the trail (AUD-3) and
+            # broke per-recovery day math on the console
+            effective_at=effective_at,
         )
         txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
     txn.set(
@@ -417,7 +421,14 @@ def check_wp_status_update(
     wp = layout.txn_get_dict(txn, layout.work_package_ref(db, workflow_id, work_package_id))
     if not wp or wp.get("status") != "ASSIGNED" or wp.get("owner_instance_id") != expected_owner:
         return {"skip": True}
-    return {"skip": False, "work_package": wp}
+    owner = layout.txn_get_dict(txn, instance_ref(db, expected_owner)) or {}
+    clock_doc = layout.txn_get_dict(txn, layout.clock_ref(db))
+    return {
+        "skip": False,
+        "work_package": wp,
+        "owner_state": owner.get("state"),
+        "logical_now": int(clock_doc["logical_time"]) if clock_doc else 0,
+    }
 
 
 def apply_wp_status_update(
@@ -428,17 +439,40 @@ def apply_wp_status_update(
     work_package_id: str,
     status: str,
     plan: dict[str, Any],
+    trace_id: str | None = None,
     **_ignored: Any,
 ) -> bool:
     """WRITES ONLY: mark the package COMPLETED or FAILED_PENDING_REPAIR —
     atomically with the specialist's outbox message, so a successful agent
-    can never be falsely timed out afterwards (ORC-4)."""
+    can never be falsely timed out afterwards (ORC-4). A COMPLETED package
+    returns its ACTIVE owner to IDLE in the same transaction, audited —
+    without this the registry showed agents ACTIVE forever after their work
+    finished (entrant defect report, 2026-08-25)."""
     if plan.get("skip"):
         return False
     txn.set(
         layout.work_package_ref(db, workflow_id, work_package_id),
         {**plan["work_package"], "status": status, "status_observed_at": now_iso()},
     )
+    owner = plan["work_package"].get("owner_instance_id")
+    if status == "COMPLETED" and owner and plan.get("owner_state") == "ACTIVE":
+        if trace_id is not None:
+            audit = build_audit_event(
+                workflow_id=workflow_id,
+                trace_id=trace_id,
+                agent_identity="forge-orchestrator",
+                event_kind="state_change",
+                reason_code="AGENT_DEACTIVATED",
+                input_obj={"instance_id": owner, "work_package_id": work_package_id},
+                output_obj={"state": "IDLE"},
+                effective_at=int(plan.get("logical_now", 0)),
+            )
+            txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
+        txn.set(
+            instance_ref(db, owner),
+            {"state": "IDLE", "state_changed_observed_at": now_iso()},
+            merge=True,
+        )
     return True
 
 
