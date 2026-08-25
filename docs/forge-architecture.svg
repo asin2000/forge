@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" role="img" font-family="Source Sans 3, system-ui, sans-serif"
+  aria-label="FORGE architecture poster: an authenticated operator uses the FORGE Operator Console to run a five-step governed recovery — report NMC, agents recover, Safety veto, human gates, 21-day wait to release. A Readiness Orchestrator assigns exclusive work over a Pub/Sub contract bus to Maintenance, Supply, and Workforce agents; Safety and Policy checks every action with a binding veto. Cyber Trust quarantines external bulletins so only screened metadata reaches the bus. Agent Registry, Firestore, Vertex AI with ADK, and operations services form the substrate, all inside a US-residency Google Cloud project with IAM boundaries per role. Banner: 11 of 12 mission capable, through governed recovery, to 12 of 12 mission capable.">
+  <defs>
+    <marker id="mB" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4FA0DC"/>
+    </marker>
+    <marker id="mG" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 z" fill="#7E93A6"/>
+    </marker>
+    <marker id="mO" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 z" fill="#E08A45"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1920" height="1080" fill="#0A0F16"/>
+
+  <!-- project boundary -->
+  <rect x="205" y="62" width="1655" height="942" rx="18" fill="none" stroke="#3A4C5E"
+    stroke-width="2" stroke-dasharray="10 8"/>
+  <text x="230" y="94" font-size="19" letter-spacing="4" fill="#8FA6B8">GOOGLE CLOUD PROJECT · US RESIDENCY</text>
+
+  <!-- operator -->
+  <rect x="10" y="120" width="176" height="122" rx="12" fill="#101B26" stroke="#4FA0DC" stroke-width="2"/>
+  <text x="98" y="163" font-size="21" text-anchor="middle" fill="#DCE8F2">Authenticated</text>
+  <text x="98" y="190" font-size="21" text-anchor="middle" fill="#DCE8F2">operator</text>
+  <text x="98" y="222" font-size="15" letter-spacing="3" text-anchor="middle" fill="#8FA6B8">HUMAN</text>
+  <polygon points="186,168 226,181 186,194" fill="#4FA0DC"/>
+
+  <!-- console -->
+  <rect x="230" y="115" width="1620" height="130" rx="14" fill="#101B26" stroke="#4FA0DC" stroke-width="2.5"/>
+  <text x="260" y="160" font-size="32" font-weight="700" fill="#EAF2F8">FORGE Operator Console</text>
+  <text x="260" y="192" font-size="20" fill="#A9BCCB">Fleet readiness · governed controls · human decisions · live agent activity · reconstructable audit</text>
+  <g font-size="16" letter-spacing="1.5">
+    <rect x="260" y="206" width="248" height="30" rx="15" fill="none" stroke="#5A7186"/>
+    <text x="384" y="227" text-anchor="middle" fill="#B9C9D6">1 · REPORT NMC</text>
+    <rect x="528" y="206" width="256" height="30" rx="15" fill="none" stroke="#5A7186"/>
+    <text x="656" y="227" text-anchor="middle" fill="#B9C9D6">2 · AGENTS RECOVER</text>
+    <rect x="804" y="206" width="238" height="30" rx="15" fill="none" stroke="#46B06E" stroke-width="2"/>
+    <text x="923" y="227" text-anchor="middle" fill="#7FD3A0">3 · SAFETY VETO</text>
+    <rect x="1062" y="206" width="256" height="30" rx="15" fill="none" stroke="#4FA0DC" stroke-width="2"/>
+    <text x="1190" y="227" text-anchor="middle" fill="#8CC4EA">4 · HUMAN GATES</text>
+    <rect x="1338" y="206" width="482" height="30" rx="15" fill="none" stroke="#5A7186"/>
+    <text x="1579" y="227" text-anchor="middle" fill="#B9C9D6">5 · WAIT 21 DAYS → RELEASE</text>
+  </g>
+
+  <!-- fleet row label + console->orchestrator arrow -->
+  <polygon points="368,252 402,252 402,290 418,290 385,318 352,290 368,290" fill="#4FA0DC"/>
+  <text x="425" y="286" font-size="20" fill="#A9BCCB">NMC event</text>
+  <text x="578" y="295" font-size="18" letter-spacing="3.5" fill="#8FA6B8">CLOUD RUN AGENT FLEET · DEDICATED IDENTITY PER ROLE</text>
+  <text x="1620" y="288" font-size="20" text-anchor="end" fill="#A9BCCB">vetted plan to approval</text>
+  <rect x="1682" y="288" width="16" height="30" fill="#4FA0DC"/>
+  <polygon points="1664,292 1716,292 1690,252" fill="#4FA0DC"/>
+
+  <!-- agent row -->
+  <rect x="230" y="318" width="315" height="176" rx="14" fill="#101B26" stroke="#4FA0DC" stroke-width="2.5"/>
+  <text x="387" y="358" font-size="26" font-weight="600" text-anchor="middle" fill="#EAF2F8">Readiness Orchestrator</text>
+  <text x="387" y="388" font-size="15" letter-spacing="2.5" text-anchor="middle" fill="#8FA6B8">MANAGER AGENT</text>
+  <text x="387" y="424" font-size="20" text-anchor="middle" fill="#C6D5E0">Decomposes + assigns</text>
+  <text x="387" y="458" font-size="20" text-anchor="middle" fill="#C6D5E0">Performs no domain work</text>
+
+  <rect x="578" y="318" width="274" height="176" rx="14" fill="#101B26" stroke="#3A4C5E" stroke-width="2"/>
+  <text x="715" y="358" font-size="26" font-weight="600" text-anchor="middle" fill="#EAF2F8">Maintenance</text>
+  <text x="715" y="388" font-size="15" letter-spacing="2.5" text-anchor="middle" fill="#8FA6B8">SPECIALIST AGENT</text>
+  <text x="715" y="424" font-size="20" text-anchor="middle" fill="#C6D5E0">Recovery plan</text>
+  <text x="715" y="458" font-size="20" text-anchor="middle" fill="#C6D5E0">Grounded facts</text>
+
+  <rect x="884" y="318" width="262" height="176" rx="14" fill="#101B26" stroke="#3A4C5E" stroke-width="2"/>
+  <text x="1015" y="358" font-size="26" font-weight="600" text-anchor="middle" fill="#EAF2F8">Supply</text>
+  <text x="1015" y="388" font-size="15" letter-spacing="2.5" text-anchor="middle" fill="#8FA6B8">SPECIALIST AGENT</text>
+  <text x="1015" y="424" font-size="20" text-anchor="middle" fill="#C6D5E0">Approved parts</text>
+  <text x="1015" y="458" font-size="20" text-anchor="middle" fill="#C6D5E0">ETA · 21 days</text>
+
+  <rect x="1178" y="318" width="298" height="176" rx="14" fill="#101B26" stroke="#3A4C5E" stroke-width="2"/>
+  <text x="1327" y="358" font-size="26" font-weight="600" text-anchor="middle" fill="#EAF2F8">Workforce</text>
+  <text x="1327" y="388" font-size="15" letter-spacing="2.5" text-anchor="middle" fill="#8FA6B8">SPECIALIST AGENT</text>
+  <text x="1327" y="424" font-size="20" text-anchor="middle" fill="#C6D5E0">Primary + held reserve</text>
+  <text x="1327" y="458" font-size="20" text-anchor="middle" fill="#C6D5E0">Automatic failover</text>
+
+  <rect x="1508" y="318" width="344" height="176" rx="14" fill="#0F2418" stroke="#46B06E" stroke-width="2.5"/>
+  <text x="1680" y="358" font-size="26" font-weight="600" text-anchor="middle" fill="#EAF2F8">Safety &amp; Policy</text>
+  <text x="1680" y="388" font-size="15" letter-spacing="2.5" text-anchor="middle" fill="#8DBFA0">POLICY ENFORCEMENT</text>
+  <text x="1680" y="424" font-size="20" text-anchor="middle" fill="#C6D5E0">Checks every action</text>
+  <text x="1680" y="458" font-size="20" font-weight="700" text-anchor="middle" fill="#7FD3A0">VETO IS BINDING</text>
+
+  <!-- orchestrator -> bus -->
+  <polygon points="368,500 402,500 402,536 418,536 385,566 352,536 368,536" fill="#4FA0DC"/>
+  <text x="428" y="540" font-size="20" fill="#A9BCCB">exclusive work</text>
+  <!-- bus -> specialists (grey up arrows) -->
+  <g fill="#7E93A6">
+    <polygon points="700,540 730,540 715,502 700,540"/><rect x="708" y="536" width="14" height="30"/>
+    <polygon points="1000,540 1030,540 1015,502 1000,540"/><rect x="1008" y="536" width="14" height="30"/>
+    <polygon points="1312,540 1342,540 1327,502 1312,540"/><rect x="1320" y="536" width="14" height="30"/>
+    <polygon points="1665,540 1695,540 1680,502 1665,540"/><rect x="1673" y="536" width="14" height="30"/>
+  </g>
+
+  <!-- bus -->
+  <rect x="230" y="573" width="1620" height="94" rx="14" fill="#101B26" stroke="#4FA0DC" stroke-width="2.5"/>
+  <text x="1040" y="612" font-size="27" font-weight="600" text-anchor="middle" fill="#EAF2F8">Pub/Sub Contract Bus</text>
+  <text x="1040" y="646" font-size="20" text-anchor="middle" fill="#A9BCCB">Versioned JSON · ordered per workflow · deduplicated · dead-lettered</text>
+
+  <!-- bottom row arrows up to bus -->
+  <polygon points="420,706 456,706 438,672 420,706" fill="#E08A45"/><rect x="431" y="702" width="16" height="32" fill="#E08A45"/>
+  <text x="466" y="712" font-size="20" fill="#E8A96C">screened metadata only</text>
+  <g fill="#7E93A6">
+    <polygon points="795,704 825,704 810,670 795,704"/><rect x="803" y="700" width="14" height="34"/>
+    <polygon points="1095,704 1125,704 1110,670 1095,704"/><rect x="1103" y="700" width="14" height="34"/>
+    <polygon points="1398,704 1428,704 1413,670 1398,704"/><rect x="1406" y="700" width="14" height="34"/>
+  </g>
+  <line x1="1717" y1="734" x2="1717" y2="706" stroke="#7E93A6" stroke-width="4" stroke-dasharray="7 7"/>
+  <polygon points="1702,706 1732,706 1717,672 1702,706" fill="#7E93A6"/>
+
+  <!-- bottom row -->
+  <rect x="230" y="734" width="415" height="196" rx="14" fill="#231610" stroke="#E08A45" stroke-width="2.5"/>
+  <text x="437" y="778" font-size="27" font-weight="600" text-anchor="middle" fill="#F2E4D6">Cyber Trust</text>
+  <text x="437" y="808" font-size="15" letter-spacing="2.5" text-anchor="middle" fill="#CE9A6C">QUARANTINE FIRST</text>
+  <text x="437" y="846" font-size="21" text-anchor="middle" fill="#E4CDB6">GCS → Model Armor → Gemini</text>
+  <text x="437" y="886" font-size="21" text-anchor="middle" fill="#E4CDB6">Only typed safe metadata leaves</text>
+
+  <rect x="680" y="734" width="260" height="196" rx="14" fill="#101B26" stroke="#3A4C5E" stroke-width="2"/>
+  <text x="810" y="778" font-size="26" font-weight="600" text-anchor="middle" fill="#EAF2F8">Agent Registry</text>
+  <text x="810" y="816" font-size="20" text-anchor="middle" fill="#C6D5E0">Catalog + discovery</text>
+  <text x="810" y="852" font-size="20" text-anchor="middle" fill="#C6D5E0">Lifecycle + health</text>
+  <text x="810" y="888" font-size="20" text-anchor="middle" fill="#C6D5E0">Cross-role reuse</text>
+
+  <rect x="972" y="734" width="276" height="196" rx="14" fill="#101B26" stroke="#3A4C5E" stroke-width="2"/>
+  <text x="1110" y="778" font-size="26" font-weight="600" text-anchor="middle" fill="#EAF2F8">Firestore</text>
+  <text x="1110" y="816" font-size="20" text-anchor="middle" fill="#C6D5E0">State + audit</text>
+  <text x="1110" y="852" font-size="20" text-anchor="middle" fill="#C6D5E0">Inbox / outbox</text>
+  <text x="1110" y="888" font-size="20" text-anchor="middle" fill="#C6D5E0">21-day resume</text>
+
+  <rect x="1278" y="734" width="270" height="196" rx="14" fill="#101B26" stroke="#4FA0DC" stroke-width="2.5"/>
+  <text x="1413" y="778" font-size="26" font-weight="600" text-anchor="middle" fill="#EAF2F8">Vertex AI + ADK</text>
+  <text x="1413" y="816" font-size="21" text-anchor="middle" fill="#C6D5E0">Gemini 3.5 Flash</text>
+  <text x="1413" y="852" font-size="20" text-anchor="middle" fill="#C6D5E0">All agent reasoning</text>
+  <text x="1413" y="888" font-size="19" text-anchor="middle" fill="#A9BCCB">Google ADK runtime</text>
+
+  <rect x="1578" y="734" width="276" height="196" rx="14" fill="#101B26" stroke="#3A4C5E" stroke-width="2"/>
+  <text x="1717" y="778" font-size="26" font-weight="600" text-anchor="middle" fill="#EAF2F8">Operations</text>
+  <text x="1717" y="816" font-size="20" text-anchor="middle" fill="#C6D5E0">Cloud Trace</text>
+  <text x="1717" y="852" font-size="20" text-anchor="middle" fill="#C6D5E0">Cloud Scheduler</text>
+  <text x="1717" y="888" font-size="20" text-anchor="middle" fill="#C6D5E0">Monitor + health</text>
+
+  <!-- external bulletin -->
+  <rect x="10" y="758" width="176" height="148" rx="12" fill="#231610" stroke="#E08A45" stroke-width="2.5" stroke-dasharray="8 6"/>
+  <text x="98" y="804" font-size="23" text-anchor="middle" fill="#F2E4D6">External</text>
+  <text x="98" y="834" font-size="23" text-anchor="middle" fill="#F2E4D6">bulletin</text>
+  <text x="98" y="872" font-size="15" letter-spacing="2.5" text-anchor="middle" fill="#CE9A6C">UNTRUSTED</text>
+  <polygon points="186,818 226,831 186,844" fill="#E08A45"/>
+
+  <!-- legend -->
+  <g font-size="19">
+    <rect x="230" y="968" width="52" height="6" rx="3" fill="#4FA0DC"/>
+    <text x="296" y="977" fill="#A9BCCB">governed recovery</text>
+    <rect x="568" y="968" width="52" height="6" rx="3" fill="#E08A45"/>
+    <text x="634" y="977" fill="#A9BCCB">untrusted-document path</text>
+    <line x1="1004" y1="971" x2="1056" y2="971" stroke="#7E93A6" stroke-width="5" stroke-dasharray="8 8"/>
+    <text x="1070" y="977" fill="#A9BCCB">telemetry</text>
+    <text x="1852" y="977" text-anchor="end" fill="#C6D5E0">IAM boundaries enforced per role</text>
+  </g>
+
+  <!-- banner -->
+  <text x="960" y="1052" font-size="33" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#EAF2F8">11/12 MISSION CAPABLE → GOVERNED RECOVERY → 12/12 MISSION CAPABLE</text>
+</svg>

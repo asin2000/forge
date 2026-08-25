@@ -1,0 +1,45 @@
+# CI-6: auto-deploy to Cloud Run via Workload Identity Federation — no
+# service-account keys anywhere in the repo or its secrets. Triggered on
+# version tags (the acceptance-tagged candidates) or manually; every run
+# ends with the live smoke: one Gemini agent round-trip and one Pub/Sub
+# publish/consume against the freshly deployed fleet (scripts/ci6_smoke.py).
+name: "CI-6 deploy (WIF) + live smoke"
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC token for WIF — the only credential involved
+  contents: read
+
+concurrency:
+  group: ci6-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: "deploy.sh via WIF, then live smoke"
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: forge-agentic-0821-6418
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/720097217888/locations/global/workloadIdentityPools/github-pool/providers/github
+          service_account: forge-ci-deployer@forge-agentic-0821-6418.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          pip install -r requirements.lock
+          pip install -e . --no-deps
+      - name: Deploy (PLT-6 one-command, CI-6 WIF)
+        run: PYTHON=python bash infra/deploy.sh
+      - name: CI-6 live smoke — Gemini round-trip + bus publish/consume
+        run: python scripts/ci6_smoke.py

@@ -45,6 +45,11 @@ class FakeDocumentRef:
             raise AlreadyExists(f"document exists: {'/'.join(self.path)}")
         self._store[self.path] = copy.deepcopy(data)
 
+    def delete(self) -> None:
+        # mirrors the real client: removes the document, leaves
+        # subcollections in place
+        self._store.pop(self.path, None)
+
 
 class FakeCollectionRef:
     def __init__(self, store: dict[tuple[str, ...], dict[str, Any]], path: tuple[str, ...]):

@@ -541,16 +541,21 @@ def create_app(
             validate_message(nmc)  # ICD-2 gates the operator's input shape
         except ContractViolation as exc:
             raise HTTPException(400, str(exc)) from exc
-        state.create_workflow(
-            db,
-            workflow_id=workflow_id,
-            equipment_id=nmc["payload"]["equipment_id"],
-            trace_id=trace_id,
-            logical_time=read_clock(db),
-            agent_identity=OPERATOR_SURFACE_IDENTITY,
-            detail=bounded_json_detail({"operator": operator, "action": "workflow_start"}),
-            outbox_messages=[nmc],
-        )
+        try:
+            state.create_workflow(
+                db,
+                workflow_id=workflow_id,
+                equipment_id=nmc["payload"]["equipment_id"],
+                trace_id=trace_id,
+                logical_time=read_clock(db),
+                agent_identity=OPERATOR_SURFACE_IDENTITY,
+                detail=bounded_json_detail({"operator": operator, "action": "workflow_start"}),
+                outbox_messages=[nmc],
+                exclusive=True,
+            )
+        except state.InvalidTransition as exc:
+            # one active recovery per vehicle (entrant QA P1)
+            raise HTTPException(409, str(exc)) from exc
         _drain(workflow_id)
         return {"workflow_id": workflow_id, "status": "INTAKE", "operator": operator}
 

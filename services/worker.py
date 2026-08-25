@@ -90,6 +90,7 @@ def create_worker(
     publish: Any = None,
     quarantine_store: Any = None,
     armor: Any = None,
+    health_prober: Any = None,
 ) -> FastAPI:
     """The push-delivery surface for one role. ``publish(message, key)`` is
     the bus transport for draining (injected in tests). The cyber_trust role
@@ -196,7 +197,10 @@ def create_worker(
                 for snapshot in db.collection("workflows").stream():
                     doc = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
                     swept += drain_outbox(db, doc["workflow_id"], publish)
-            health = probe_fleet_health(db)  # REG-1: authenticated fleet probe
+            # REG-1: authenticated fleet probe. ``health_prober`` is
+            # injectable so unit tests NEVER touch the network — the
+            # registry carries real deployed endpoints (entrant QA P2).
+            health = probe_fleet_health(db, prober=health_prober)
             return {
                 "timed_out": flagged,
                 "due_emitted": due,

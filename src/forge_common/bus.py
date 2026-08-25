@@ -500,6 +500,29 @@ def _process_message_inner(
             if (
                 writes.owned_effects is not None
                 and owned_plan is not None
+                and owned_plan.get("reason") == "owner_failed"
+            ):
+                # AUD-1: the refusal is visible in the trail — a FAILED
+                # owner's late success must neither land nor vanish silently
+                refusal = build_audit_event(
+                    workflow_id=workflow_id,
+                    trace_id=envelope["trace_id"],
+                    agent_identity=owned_plan["owner"],
+                    event_kind="blocked_action",
+                    reason_code="RESULT_REFUSED_OWNER_FAILED",
+                    input_obj={
+                        "work_package_id": writes.owned_effects["work_package_id"],
+                        "instance_id": owned_plan["owner"],
+                    },
+                    output_obj={"refused": True},
+                    effective_at=int(owned_plan.get("logical_now", 0)),
+                )
+                txn.create(
+                    layout.audit_ref(db, workflow_id, refusal["envelope"]["event_id"]), refusal
+                )
+            if (
+                writes.owned_effects is not None
+                and owned_plan is not None
                 and not owned_plan["skip"]
             ):
                 registry.apply_wp_status_update(
