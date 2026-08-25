@@ -16,7 +16,7 @@ from typing import Any
 
 from forge_common import layout, synthetic_data
 from forge_common.agent_base import StructuredAgent
-from forge_common.audit import build_audit_event
+from forge_common.audit import bounded_json_detail, build_audit_event
 from forge_common.bus import TxnWrites
 from forge_common.clock import read_clock
 from forge_common.state import TERMINAL_STATES
@@ -138,6 +138,18 @@ def make_validation_handler(db: Any, model: Any):
                 output_obj=result["payload"],
                 effective_at=read_clock(db),
                 work_package_id=envelope["work_package_id"],
+                # A veto's WHY must reconstruct from the trail verbatim (and
+                # render on the console), not live only inside output hashes.
+                detail=(
+                    bounded_json_detail(
+                        {
+                            "reasons": result["payload"]["reasons"],
+                            "rule_refs": result["payload"]["rule_refs"],
+                        }
+                    )
+                    if vetoed
+                    else None
+                ),
             )
         )
 

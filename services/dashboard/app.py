@@ -330,12 +330,21 @@ def create_app(
         CAPABLE. No stored vehicle flag exists anywhere; like every console
         surface, the strip renders only what the audit substrate proves."""
         live_by_equipment: dict[str, dict[str, Any]] = {}
+        last_terminal: dict[str, tuple[str, str]] = {}
         for workflow in _docs(db.collection("workflows")):
-            if workflow.get("status") in state.TERMINAL_STATES:
-                continue
             equipment = workflow.get("equipment_id")
+            if not equipment:
+                continue
+            if workflow.get("status") in state.TERMINAL_STATES:
+                # remembered so the UI can tell a REPAIRED vehicle (last
+                # recovery RELEASED) from a merely CANCELLED one — the
+                # readiness payoff celebrates only genuine repairs
+                stamp = str(workflow.get("updated_observed_at", ""))
+                if equipment not in last_terminal or stamp > last_terminal[equipment][0]:
+                    last_terminal[equipment] = (stamp, workflow["status"])
+                continue
             # oldest live recovery wins the tile (deterministic by id)
-            if equipment and (
+            if (
                 equipment not in live_by_equipment
                 or workflow["workflow_id"] < live_by_equipment[equipment]["workflow_id"]
             ):
@@ -356,6 +365,11 @@ def create_app(
                     "status": status,
                     "workflow_id": active["workflow_id"] if active else None,
                     "workflow_status": active["status"] if active else None,
+                    "last_outcome": (
+                        last_terminal[equipment_id][1]
+                        if active is None and equipment_id in last_terminal
+                        else None
+                    ),
                 }
             )
         capable = sum(1 for v in vehicles if v["status"] == "MISSION_CAPABLE")
@@ -472,6 +486,7 @@ def create_app(
                 now = {
                     "kind": "processing",
                     "text": f"Processing {claim['schema_version'] or 'event'}",
+                    "schema_version": claim["schema_version"],
                     "workflow_id": claim["workflow_id"],
                 }
             elif package is not None:

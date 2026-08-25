@@ -149,7 +149,7 @@ box-shadow:0 6px 30px rgba(0,0,0,.55);animation:bannerin 2.8s ease-in-out 1 forw
   <button class="docktoggle" onclick="toggleDock()" id="dockbtn">Collapse &#9662;</button></h2>
  <div id="agentstrip" class="lanes mut">—</div></div>
 <script>
-let CUR=null;let FILTER=null;let LANEWAS={};let LANES=[];let META={};
+let CUR=null;let CURTERMINAL=false;let FILTER=null;let LANEWAS={};let LANES=[];let META={};
 let SEEN=null;let FLEETWAS=null;let AUTOPICKED=false;
 async function j(u,opt){const r=await fetch(u,opt);if(!r.ok)throw new Error(await r.text());return r.json()}
 function tag(v){return `<span class="tag ${v}">${v}</span>`}
@@ -158,12 +158,17 @@ function shortId(id){return '…'+String(id).slice(-6)}
 const ROLE_BUSY={'orchestrator':'Coordinating specialist results','maintenance':'Building recovery plan',
  'supply':'Checking approved parts inventory','workforce':'Matching qualified technicians',
  'safety':'Validating against safety policies','cyber-trust':'Screening external document'};
+const SCHEMA_BUSY={'nmc_event.v2':'Breaking the NMC into work packages',
+ 'approval_decision.v2':"Applying the operator's decision",
+ 'due_event.v2':'Due event — resuming the workflow',
+ 'agent_failure_event.v2':'Handling an agent failure'};
+function busyCaption(role,now){return (now&&SCHEMA_BUSY[now.schema_version])||ROLE_BUSY[role]||'Working'}
 const REASON_HUMAN={'WORKFLOW_CREATED':'Recovery opened','DECOMPOSED':'Broke the NMC into work packages',
  'DOMAIN_OUTPUT_PRODUCED':'Delivered its work product','ACTION_APPROVED':'Validated a proposed action',
  'ACTION_VETOED':'VETOED an unauthorized action','VERDICT_APPROVED':'Accepted the safety verdict',
  'VERDICT_VETOED':'Verdict: vetoed','PLAN_RECEIVED':'Recovery plan received',
  'SCHEDULE_OVERRIDE_APPROVED':'Schedule override approved by the operator',
- 'RELEASE_APPROVED':'Equipment released by the operator','PART_ETA_REACHED':'Part arrived — resuming',
+ 'RELEASE_APPROVED':'Equipment released by the operator','PART_ETA_REACHED':'Part ETA reached — resuming',
  'WORKFORCE_RESERVE_DEPLOYED':'Reserve deployed for failed primary',
  'AGENT_ACTIVATED':'Activated for a work package','DOCUMENT_QUARANTINED':'Quarantined an external document',
  'DOCUMENT_SCREENED':'Screening verdict published','WORKFLOW_CANCELLED':'Recovery cancelled by the operator',
@@ -188,13 +193,19 @@ function nextExpected(s,due){return {INTAKE:'Orchestrator decomposition',
 function showBanner(text,cls){const b=document.createElement('div');
  b.className='banner '+(cls||'');b.textContent=text;
  document.getElementById('banners').appendChild(b);setTimeout(()=>b.remove(),2900)}
+let FLEETSEQ=0;
 async function loadFleet(){
+  const seq=++FLEETSEQ;
   const f=await j('/api/fleet');
-  const now={};f.vehicles.forEach(v=>now[v.equipment_id]=v.status);
+  if(seq!==FLEETSEQ)return; // stale response — a newer poll already landed
+  const now={};f.vehicles.forEach(v=>now[v.equipment_id]=v);
   let restored=[];
-  if(FLEETWAS){for(const id in now){if(FLEETWAS[id]&&FLEETWAS[id]!=='MISSION_CAPABLE'&&now[id]==='MISSION_CAPABLE')restored.push(id)}}
-  const payoff=restored.length>0;
-  if(payoff)showBanner('OPERATIONAL READINESS RESTORED — '+f.readiness.capable+'/'+f.readiness.total+' MISSION CAPABLE','good');
+  if(FLEETWAS){for(const id in now){
+    // the payoff celebrates REPAIRS only: NMC -> MC with the last recovery
+    // RELEASED — a cancelled recovery frees the tile without fanfare
+    if(FLEETWAS[id]&&FLEETWAS[id].status!=='MISSION_CAPABLE'
+       &&now[id].status==='MISSION_CAPABLE'&&now[id].last_outcome==='RELEASED')restored.push(id)}}
+  if(restored.length)showBanner('OPERATIONAL READINESS RESTORED — '+f.readiness.capable+'/'+f.readiness.total+' MISSION CAPABLE','good');
   FLEETWAS=now;
   document.getElementById('fleet').innerHTML=
    `<span class="fleetchip${f.readiness.capable===f.readiness.total?' payoff':''}">FLEET READINESS ${f.readiness.capable}/${f.readiness.total} MC</span>`+
@@ -223,8 +234,10 @@ async function loadCatalog(){
      <span class="mut">${d.department_owner} · ${d.capabilities.join(', ')}</span><br>
      ${d.instances.map(i=>`${i.instance_id} ${tag(i.state)} ${tag(i.health)}`).join('<br>')}</div>`).join('');
   const sel=document.getElementById('demo-instance');const had=sel.value;
-  sel.innerHTML=cat.flatMap(d=>d.instances).map(i=>`<option value="${i.instance_id}">${i.instance_id} (${i.state})</option>`).join('');
-  if(had)sel.value=had;
+  const options=cat.flatMap(d=>d.instances).map(i=>`<option value="${i.instance_id}">${i.instance_id} (${i.state})</option>`).join('');
+  if(sel.dataset.options!==options){ // rebuild only on change: an open
+    sel.innerHTML=options;sel.dataset.options=options; // dropdown survives polls
+    if(had)sel.value=had;}
 }
 async function loadClock(){
   try{const c=await j('/api/clock');document.getElementById('clockday').textContent=c.logical_time}catch(e){}
@@ -232,15 +245,18 @@ async function loadClock(){
 const BANNER_RULES={'DOCUMENT_QUARANTINED':['HOSTILE BULLETIN QUARANTINED','hostile'],
  'ACTION_VETOED':['SAFETY VETO — UNAUTHORIZED ACTION BLOCKED','good'],
  'WORKFORCE_RESERVE_DEPLOYED':['WORKFORCE AGENT FAILED — RESERVE DEPLOYED',''],
- 'PART_ETA_REACHED':['21 DAYS ELAPSED — WORKFLOW RESUMED','']};
+ 'PART_ETA_REACHED':['PART ETA REACHED — WORKFLOW RESUMED','']};
 async function loadActivity(){
-  const feed=await j('/api/activity?limit=25'+(FILTER?'&agent='+FILTER:''));
-  if(!FILTER){const keys=feed.map(e=>e.observed_at+e.reason_code);
-    if(SEEN===null){SEEN=new Set(keys)}else{
-      for(const e of feed.slice().reverse()){const k=e.observed_at+e.reason_code;
-        if(SEEN.has(k))continue;SEEN.add(k);
-        if(BANNER_RULES[e.reason_code])showBanner(...BANNER_RULES[e.reason_code]);
-        else if(e.state_after==='RELEASED')showBanner('EQUIPMENT RELEASED — RECOVERY COMPLETE','good');}}}
+  // banner bookkeeping ALWAYS runs on the unfiltered stream — a lane filter
+  // narrows the table, never the hero moments (and never causes a replay
+  // burst when the filter clears)
+  const full=await j('/api/activity?limit=25');
+  if(SEEN===null){SEEN=new Set(full.map(e=>e.observed_at+e.reason_code))}else{
+    for(const e of full.slice().reverse()){const k=e.observed_at+e.reason_code;
+      if(SEEN.has(k))continue;SEEN.add(k);
+      if(BANNER_RULES[e.reason_code])showBanner(...BANNER_RULES[e.reason_code]);
+      else if(e.state_after==='RELEASED')showBanner('EQUIPMENT RELEASED — RECOVERY COMPLETE','good');}}
+  const feed=FILTER?await j('/api/activity?limit=25&agent='+FILTER):full;
   document.getElementById('activity').innerHTML=feed.length?`<table>
    <tr><th>Observed</th><th>Day</th><th>Agent</th><th>What happened</th><th>Workflow</th><th>State</th></tr>
    ${feed.map(e=>`<tr><td class="mut">${e.observed_at.slice(11,19)}</td><td>${e.effective_at}</td><td>${e.agent_identity}</td><td>${esc(humanReason(e.reason_code))} <span class="mut">· ${e.reason_code}</span></td><td class="mut" title="${esc(e.workflow_id)}">${shortId(e.workflow_id)}</td><td>${e.state_after?tag(e.state_after):''}</td></tr>`).join('')}</table>`:'—';
@@ -263,7 +279,7 @@ async function loadLanes(){
     const cls=['lane',working?'working':'',flash?'flash':'',
       l.now.kind==='failed'?'failedlane':'',FILTER===l.definition_id?'selected':''].join(' ');
     let main,sub='';
-    if(working){main=ROLE_BUSY[role]||'Working';sub=esc(l.now.text)+(l.now.workflow_id?' · '+shortId(l.now.workflow_id):'');}
+    if(working){main=busyCaption(role,l.now);sub=esc(l.now.text)+(l.now.workflow_id?' · '+shortId(l.now.workflow_id):'');}
     else if(l.now.kind==='failed'){main='FAILED — restore required';}
     else if(l.now.kind==='reserve'){main='Standing by (reserve)';}
     else{main=top?humanReason(top.reason_code):'Idle';sub=top?top.observed_at.slice(11,19):'';}
@@ -292,11 +308,14 @@ function toggleDock(){
 function storyPanel(id,d){
   const s=d.state.status;const terminal=['RELEASED','CANCELLED'].includes(s);
   const idx=STAGES.findIndex(x=>x[0]===s);
+  // furthest stage genuinely reached, from the audit trail — so CANCELLED
+  // and BLOCKED show honest progress and RELEASED shows a finished rail
+  const reached=Math.max(idx,...d.audit_trail.map(e=>STAGES.findIndex(x=>x[0]===e.state_after)));
   const lane=LANES.find(l=>l.now&&l.now.workflow_id===id);
   const role=lane?lane.definition_id.replace('forge-',''):null;
   let action,owner;
   if(d.pending_approvals.length){action='Awaiting your decision — '+d.pending_approvals[0].action_type;owner='YOU (human gate)';}
-  else if(lane){action=ROLE_BUSY[role]||'Working';owner=lane.acting_instance_id||role;}
+  else if(lane){action=busyCaption(role,lane.now);owner=lane.acting_instance_id||role;}
   else if(s==='SUSPENDED_AWAITING_PART'){action='Suspended — waiting for the part';owner='Logical Clock';}
   else if(s==='RELEASED'){action='Recovery complete';owner='—';}
   else if(s==='CANCELLED'){action='Cancelled by the operator';owner='—';}
@@ -311,7 +330,9 @@ function storyPanel(id,d){
    <div class="headline">${headline}</div>
    <div class="sub">${esc(d.state.equipment_id)} · DSC recovery ${shortId(id)} · one trace: <span class="mut">${esc(trace).slice(0,12)}…</span>${traceLink}</div>
    <div class="stages">${STAGES.map((st,n)=>{
-     const cls=terminal&&s==='CANCELLED'?(n<=idx?'done':''):n<idx?'done':n===idx?'current':'';
+     const cls=s==='RELEASED'?'done'
+       :(terminal||s==='BLOCKED_AGENT_FAILURE')?(n<=reached?'done':'')
+       :n<idx?'done':n===idx?'current':'';
      return `<span class="stage ${cls}">${st[1]}</span>`}).join('<span class="mut">›</span>')}
      ${s==='BLOCKED_AGENT_FAILURE'?tag('BLOCKED_AGENT_FAILURE'):''}${s==='CANCELLED'?tag('CANCELLED'):''}</div>
    <div class="storygrid">
@@ -322,7 +343,8 @@ function storyPanel(id,d){
    </div></div>`;
 }
 function vetoCallout(d){
-  const vetoes=d.audit_trail.filter(e=>e.event_kind==='veto'||e.reason_code==='ACTION_VETOED'||e.reason_code==='RELEASE_VERDICT_VETOED');
+  const vetoes=d.audit_trail.filter(e=>e.event_kind==='veto'||e.reason_code==='ACTION_VETOED'
+    ||e.reason_code==='VERDICT_VETOED'||e.reason_code==='RELEASE_VERDICT_VETOED');
   if(!vetoes.length)return '';
   const v=vetoes[vetoes.length-1];let why=[];
   try{const parsed=JSON.parse(v.detail||'{}');
@@ -334,17 +356,19 @@ function vetoCallout(d){
 async function show(id){
   CUR=id;
   const d=await j('/api/workflows/'+id);
+  if(CUR!==id)return; // the user selected another workflow while we fetched
   const terminal=['RELEASED','CANCELLED'].includes(d.state.status);
+  CURTERMINAL=terminal;
   const approvals=d.pending_approvals.map(p=>`
    <div class="panel"><h2>Approval required — ${p.action_type} <span class="mut">(${p.approval_id})</span></h2>
     <p class="approval-rec"><strong>${esc(p.recommended_action)}</strong> <span class="mut">confidence ${p.confidence}</span></p>
     <table>
-     <tr><th>Sources</th><td>${p.source_refs.join('; ')}</td></tr>
+     <tr><th>Sources</th><td>${esc(p.source_refs.join('; '))}</td></tr>
      <tr><th>Facts</th><td><ul>${p.extracted_facts.map(f=>`<li>${esc(f)}</li>`).join('')}</ul></td></tr>
-     <tr><th>Rules</th><td>${p.applicable_rules.join(', ')}</td></tr>
+     <tr><th>Rules</th><td>${esc(p.applicable_rules.join(', '))}</td></tr>
      <tr><th>Constraints</th><td>${(p.constraints||[]).map(esc).join('; ')||'—'}</td></tr>
      <tr><th>Alternatives</th><td>${(p.alternatives_considered||[]).map(a=>`${esc(a.option)} <span class="mut">— ${esc(a.rejected_reason)}</span>`).join('<br>')||'—'}</td></tr>
-     <tr><th>Versions</th><td class="mut">${p.versions.agent_id} · ${p.versions.model_id} · prompt ${p.versions.prompt_version} · ${p.versions.schema_version}</td></tr>
+     <tr><th>Versions</th><td class="mut">${esc(p.versions.agent_id)} · ${esc(p.versions.model_id)} · prompt ${esc(p.versions.prompt_version)} · ${esc(p.versions.schema_version)}</td></tr>
     </table>
     <p><button class="big" onclick="decide('${id}','${p.approval_id}','approved')">Approve</button>
        <button class="big reject" onclick="decide('${id}','${p.approval_id}','rejected')">Reject</button></p>
@@ -395,7 +419,7 @@ async function advanceClock(){
   catch(e){alert(e.message)}
 }
 async function injectBulletin(wf){
-  if(!wf){alert('Select a live workflow first.');return;}
+  if(!wf||CURTERMINAL){alert('Select a live (non-terminal) workflow first.');return;}
   try{const r=await j('/api/anomalies/bulletin',{method:'POST',
     headers:{'content-type':'application/json'},body:JSON.stringify({workflow_id:wf})});
     await show(wf);}
@@ -410,8 +434,8 @@ async function instanceAction(iid,action){
   catch(e){alert(e.message)}
 }
 async function whoami(){
-  try{const w=await j('/api/whoami');
-    document.getElementById('operator').innerHTML=`<span title="${esc(w.approver_identity)}">&#10003; operator authenticated</span>`}
+  try{await j('/api/whoami'); // probe only: the identity stays OUT of the DOM
+    document.getElementById('operator').textContent='✓ operator authenticated'}
   catch(e){}
 }
 async function loadMeta(){try{META=await j('/api/meta')}catch(e){META={}}}
