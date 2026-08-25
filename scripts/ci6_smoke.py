@@ -77,6 +77,8 @@ def id_token_for(audience: str) -> str:
     import google.auth.transport.requests
     import google.oauth2.id_token
 
+    if os.environ.get("CI6_ID_TOKEN"):
+        return os.environ["CI6_ID_TOKEN"]  # minted by the WIF auth action
     try:
         return google.oauth2.id_token.fetch_id_token(
             google.auth.transport.requests.Request(), audience
