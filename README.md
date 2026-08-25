@@ -130,7 +130,7 @@ data is synthetic (SUB-5).
 
 ## Acceptance & evidence
 
-Frozen at tag **`v1.3-demo.9`** (DFT-4; series began at `v1.3-demo` =
+Frozen at tag **`v1.3-demo.10`** (DFT-4; series began at `v1.3-demo` =
 `7e19d47`). As of this revision the README/SUBMISSION pins land in the SAME
 commit the tag points at — the tagged tree self-describes (entrant cleanup
 item 4; earlier tags' READMEs describe the then-previous tag). The v1.3
