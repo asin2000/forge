@@ -130,14 +130,16 @@ data is synthetic (SUB-5).
 
 ## Acceptance & evidence
 
-Frozen at tag **`v1.3-demo.8`** (DFT-4; commit `eb9b333`; series began
-at `v1.3-demo` = `7e19d47`). The v1.3
+Frozen at tag **`v1.3-demo.9`** (DFT-4; series began at `v1.3-demo` =
+`7e19d47`). As of this revision the README/SUBMISSION pins land in the SAME
+commit the tag points at — the tagged tree self-describes (entrant cleanup
+item 4; earlier tags' READMEs describe the then-previous tag). The v1.3
 operator-console amendment (HUM-3) reset the acceptance count per the
 entrant's rule, and the full live acceptance re-ran on the new tag
 (baseline history: `v1.2-demo` … `v1.2-demo.3`). CI enforces eight gates on
 every PR (lint, contracts+ICD-3, unit, real-emulator integration, secrets,
-dead-code, config/registry+residency, traceability); the suite is **322
-tests (301 unit + 21 real-client emulator)** and traceability runs in
+dead-code, config/registry+residency, traceability); the suite is **326
+tests (303 unit + 23 real-client emulator)** and traceability runs in
 strict mode.
 
 Live acceptance on the frozen commit, verbatim captures in

@@ -107,6 +107,12 @@ advances and performs the approvals through the deployed dashboard API.
 ## What to claim, precisely
 
 - Gemini 3.5 Flash on Vertex, Google ADK, seven Cloud Run services — all live.
+- Deployments run **keylessly via Workload Identity Federation on
+  acceptance tags and manual dispatch** — do not claim "deploys on every
+  merge."
+- Duplicate recovery starts are **refused (409) and audited** on the
+  active recovery's trail (as of v1.3-demo.9; on earlier runtimes say
+  "refused" only).
 - Model Armor **missed the diluted injection**; the Cyber Trust classifier
   caught it (defense in depth). Do not claim Model Armor blocked it.
 - Human approvals AND operator actions are recorded from the

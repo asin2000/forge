@@ -237,3 +237,44 @@ def test_direct_exclusive_create_raises_and_non_exclusive_is_unchanged():
         trace_id="c" * 32,
         logical_time=0,
     )
+
+
+def test_rejected_duplicate_start_is_audited_on_the_active_recovery():
+    """Entrant cleanup item 3: HUM-3/AUD-1 — the REFUSED operator action
+    must appear in the trail, not vanish into a bare 409."""
+    db = ready_db()
+    client = make_client(db)
+    first = client.post("/api/workflows", headers=AUTHED, json=start_body()).json()
+    second = client.post("/api/workflows", headers=AUTHED, json=start_body())
+    assert second.status_code == 409
+    rejections = [
+        e
+        for e in state.reconstruct_audit_trail(db, first["workflow_id"])
+        if e["payload"]["reason_code"] == "OPERATOR_START_REJECTED"
+    ]
+    assert len(rejections) == 1
+    assert rejections[0]["payload"]["event_kind"] == "blocked_action"
+    assert OPERATOR in rejections[0]["payload"]["detail"]
+
+
+def test_duplicate_recovery_exception_carries_the_existing_workflow():
+    db = ready_db()
+    state.create_workflow(
+        db,
+        workflow_id="wf-day14-b01",
+        equipment_id="GX12-05",
+        trace_id="d" * 32,
+        logical_time=0,
+        exclusive=True,
+    )
+    with pytest.raises(state.DuplicateRecovery) as excinfo:
+        state.create_workflow(
+            db,
+            workflow_id="wf-day14-b02",
+            equipment_id="GX12-05",
+            trace_id="e" * 32,
+            logical_time=0,
+            exclusive=True,
+        )
+    assert excinfo.value.existing_workflow_id == "wf-day14-b01"
+    assert excinfo.value.equipment_id == "GX12-05"
