@@ -33,6 +33,16 @@ jobs:
         with:
           workload_identity_provider: projects/720097217888/locations/global/workloadIdentityPools/github-pool/providers/github
           service_account: forge-ci-deployer@forge-agentic-0821-6418.iam.gserviceaccount.com
+      - id: smoke_token
+        # the smoke's OIDC bearer for the cyber-trust ingest: minted by the
+        # auth action (external-account creds cannot mint one client-side)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/720097217888/locations/global/workloadIdentityPools/github-pool/providers/github
+          service_account: forge-ci-deployer@forge-agentic-0821-6418.iam.gserviceaccount.com
+          token_format: id_token
+          id_token_audience: https://forge-cyber-trust-3vnecimj5a-uc.a.run.app
+          id_token_include_email: true
       - uses: google-github-actions/setup-gcloud@v2
       - uses: actions/setup-python@v5
         with:
@@ -44,4 +54,6 @@ jobs:
       - name: Deploy (PLT-6 one-command, CI-6 WIF)
         run: PYTHON=python bash infra/deploy.sh
       - name: CI-6 live smoke — Gemini round-trip + bus publish/consume
+        env:
+          CI6_ID_TOKEN: ${{ steps.smoke_token.outputs.id_token }}
         run: python scripts/ci6_smoke.py
