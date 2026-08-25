@@ -1,10 +1,10 @@
 # FORGE demo runbook — ≤4-minute video
 
 Record against the **tagged runtime**. The deployed Cloud Run fleet on
-`forge-agentic-0821-6418` is built from the acceptance-tagged commit
-**`v1.3-demo` = `7e19d47`** (10/10 + 69 s rehearsal + console rehearsal:
-`docs/verification/2026-08-23-v13-acceptance.md`) — you run everything from
-`main`, whose runtime code is byte-identical to the tag. Do not modify
+`forge-agentic-0821-6418` is built from the current acceptance tag (see
+README → Acceptance & evidence for the tag and its verbatim 10/10 record) —
+you run everything from `main`, whose runtime code is byte-identical to the
+tag. Do not modify
 runtime code or touch the infrastructure during capture.
 
 With HUM-3 the demo is **console-driven**: every beat happens as clicks in
@@ -42,12 +42,14 @@ your authenticated operator identity.
 
 **Framing rules (from review):** record the browser CONTENT AREA only —
 crop all browser chrome so no `localhost` URL is visible. Prove deployment
-with the Cloud Run console tab, not the address bar. Read the veto's "why"
-from the approval card's FACTS/RULES rows; show trace evidence on a
-separate Cloud Trace tab (the dashboard intentionally carries no trace
-link). In the Agent Catalog, point at the STATE column (IDLE / RESERVE /
-ACTIVE / FAILED) — health badges derive from live heartbeats and read
-HEALTHY when the fleet is up.
+with the Cloud Run console tab, not the address bar. The console now
+narrates for you: the mission-story panel carries the recovery stage,
+current action, and owner; the SAFETY VETO callout surfaces the veto's
+"why" directly; hero banners fire on the five key moments; and **View
+distributed trace** in the story panel opens the Cloud Trace waterfall
+(keep the pre-opened Cloud Trace tab as backup). The header shows
+"operator authenticated" — no personal email on camera. In the Agent
+Catalog, point at the STATE column (IDLE / RESERVE / ACTIVE / FAILED).
 
 Have two extra browser tabs ready: the Cloud Run services list, and a Cloud
 Trace waterfall you can refresh after the spine completes.
@@ -64,9 +66,11 @@ Trace waterfall you can refresh after the spine completes.
    audit trail. The wall can't show anything the audit trail can't
    prove."* The Live Agent Activity feed below carries the merged stream
    (click a lane to filter it to that agent).
-2. **Inject the poisoned bulletin** — open the workflow, click **Inject
-   poisoned bulletin**. Narrate the audit trail rows: DOCUMENT_QUARANTINED
-   first (quarantine-first, SEC-1), then the screening verdict. Say it
+2. **Simulate the hostile bulletin** — with the workflow selected, click
+   **Simulate hostile vendor bulletin** (Synthetic Demo Controls). The
+   HOSTILE BULLETIN QUARANTINED banner fires; narrate the audit trail:
+   DOCUMENT_QUARANTINED first (quarantine-first, SEC-1), then the
+   screening verdict and the SAFETY VETO callout. Say it
    precisely: *"Model Armor returned clean — the diluted injection evades
    the inline filter — and the second, tool-less classifier caught it.
    Neither layer alone was enough; the two in series were. The raw document
@@ -78,14 +82,17 @@ Trace waterfall you can refresh after the spine completes.
 4. **Advance the clock** — 21 days, click **Advance**. The Day chip jumps,
    the due event fires, the workflow resumes unattended:
    PART_ETA_REACHED → ASSEMBLY_RESUMED → AWAITING_RELEASE_APPROVAL.
-5. **Approve release** — second HUM-1 gate → RELEASED. Point at the audit
-   trail: every hop, one trace, reconstructed from Firestore alone.
-6. *(Optional anomaly beat, if time allows)* — click **Fail** on
-   `agent-workforce-01` in the catalog (audited induction; the tag flips to
-   FAILED), **Report NMC** again: the plan blocks with an audited
-   NO_CAPABLE_AGENT escalation — the registry gates real work. **Cancel**
-   the blocked workflow (audited terminal CANCELLED), **Restore** the
-   instance.
+5. **Approve release** — second HUM-1 gate → RELEASED. The closing shot
+   plays itself: the vehicle tile flips amber NMC → green MC, the fleet
+   chip reads 12/12 MC, and the OPERATIONAL READINESS RESTORED banner
+   fires. Point at the audit trail: every hop, one trace, reconstructed
+   from Firestore alone.
+6. *(Optional anomaly beat, if time allows)* — in Synthetic Demo
+   Controls pick `agent-workforce-01` and click **Inject agent failure**
+   (audited induction; the catalog tag flips to FAILED), **Report NMC**
+   again: the plan blocks with an audited NO_CAPABLE_AGENT escalation —
+   the registry gates real work. **Cancel** the blocked workflow (audited
+   terminal CANCELLED), then **Restore** the instance.
 7. Closer: refresh the Cloud Trace tab on the workflow's trace id — one
    waterfall spanning all services, metadata only.
 

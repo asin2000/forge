@@ -884,6 +884,17 @@ def test_safety_roster_verdicts():
     )
     assert verdict["payload"]["verdict"] == "vetoed"
     assert "SP-QUAL-001" in verdict["payload"]["rule_refs"]
+    # the veto's WHY reconstructs from the trail verbatim (and renders on the
+    # console's SAFETY VETO callout) — never only inside output hashes
+    import json as _json
+
+    veto_audit = next(
+        e
+        for e in state.reconstruct_audit_trail(db, WF)
+        if e["payload"]["reason_code"] == "ACTION_VETOED"
+    )
+    veto_detail = _json.loads(veto_audit["payload"]["detail"])
+    assert veto_detail["reasons"] and "SP-QUAL-001" in veto_detail["rule_refs"]
 
     good = roster_msg("T-1001", "Q-HYD-101")
     approving = stub_json(

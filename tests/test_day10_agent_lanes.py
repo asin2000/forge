@@ -270,3 +270,91 @@ def test_fleet_blocked_workflow_surfaces_blocked():
 def test_page_carries_fleet_strip_and_collapsible_dock():
     for marker in ("/api/fleet", "FLEET READINESS", "toggleDock", "applyDock", "docksum"):
         assert marker in PAGE_HTML
+
+
+# --------------------------------------------------- presentation layer (v1.3)
+
+
+def test_meta_endpoint_carries_project_id_for_the_trace_link():
+    db = ready_db()
+    client = TestClient(create_app(db, verifier=lambda token: OPERATOR, project_id="demo-project"))
+    assert client.get("/api/meta").json() == {"project_id": "demo-project"}
+    assert make_client(db).get("/api/meta").json() == {"project_id": ""}
+
+
+def test_page_carries_the_mission_story_and_hero_moments():
+    for marker in (
+        "storyPanel",
+        "NON-MISSION-CAPABLE",
+        "showBanner",
+        "HOSTILE BULLETIN QUARANTINED",
+        "SAFETY VETO — UNAUTHORIZED ACTION BLOCKED",
+        "RESERVE DEPLOYED",
+        "PART ETA REACHED — WORKFLOW RESUMED",
+        "OPERATIONAL READINESS RESTORED",
+        "Simulate hostile vendor bulletin",
+        "Synthetic Demo Controls",
+        "Inject agent failure",
+        "View distributed trace",
+        "operator authenticated",
+        "vetoCallout",
+        "prefers-reduced-motion",
+    ):
+        assert marker in PAGE_HTML
+
+
+def test_fleet_last_outcome_distinguishes_repair_from_cancellation():
+    """Review finding: the readiness payoff must celebrate only genuine
+    repairs — the strip reports the last terminal outcome per MC vehicle."""
+    db = ready_db()
+    client = make_client(db)
+    client.post(f"/api/workflows/{WF}/cancel", headers=AUTHED, json={})
+    by_id = {v["equipment_id"]: v for v in client.get("/api/fleet").json()["vehicles"]}
+    assert by_id["GX12-07"]["status"] == "MISSION_CAPABLE"
+    assert by_id["GX12-07"]["last_outcome"] == "CANCELLED"
+    # a NEWER released recovery for the same vehicle wins the outcome
+    layout.workflow_ref(db, "wf-day10-later").set(
+        layout.validate_state_doc(
+            {
+                "workflow_id": "wf-day10-later",
+                "status": "RELEASED",
+                "logical_time": 21,
+                "due_at": None,
+                "equipment_id": "GX12-07",
+                "trace_id": "beefbeefbeefbeefbeefbeefbeefbeef",
+                "updated_observed_at": "2099-01-01T00:00:00.000000Z",
+            }
+        )
+    )
+    by_id = {v["equipment_id"]: v for v in client.get("/api/fleet").json()["vehicles"]}
+    assert by_id["GX12-07"]["last_outcome"] == "RELEASED"
+    assert by_id["GX12-01"]["last_outcome"] is None  # never recovered
+
+
+def test_lane_processing_now_carries_schema_version_field():
+    db = ready_db()
+    message_id = deterministic_event_id("day10-nmc2", WF)
+    layout.outbox_ref(db, WF, message_id).set(
+        {
+            "message": {
+                "envelope": build_envelope(
+                    workflow_id=WF,
+                    schema_version="nmc_event.v2",
+                    event_id=message_id,
+                    trace_id=TRACE,
+                    idempotency_key="idem-day10-nmc2",
+                ),
+                "payload": {
+                    "equipment_id": "GX12-07",
+                    "discrepancy_code": "DSC-0042",
+                    "description": "Failed hydraulic actuator on lift assembly",
+                    "reported_at": "2026-08-24T09:00:00Z",
+                },
+            },
+            "published": True,
+            "enqueued_at": now_iso(),
+        }
+    )
+    seed_claim(db, consumer="forge-orchestrator", event_id=message_id)
+    lane = lanes_by_id(make_client(db))["forge-orchestrator"]
+    assert lane["now"]["schema_version"] == "nmc_event.v2"

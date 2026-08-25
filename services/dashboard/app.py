@@ -96,6 +96,7 @@ def create_app(
     iap_verifier: Any = None,
     publish: Any = None,
     ingest_forward: Any = None,
+    project_id: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="FORGE dashboard", docs_url=None, redoc_url=None)
     verify: dict[str, Any] = {}
@@ -282,6 +283,13 @@ def create_app(
     def clock() -> dict[str, int]:
         return {"logical_time": read_clock(db)}
 
+    @app.get("/api/meta")
+    def meta() -> dict[str, str]:
+        """Read-only deployment metadata: the project id lets the UI link a
+        workflow's trace to the Cloud Trace console (entrant review: a
+        visible View-distributed-trace affordance)."""
+        return {"project_id": project_id or ""}
+
     @app.get("/api/activity")
     def activity(limit: int = 30, agent: str | None = None) -> list[dict[str, Any]]:
         """Live Agent Activity: newest-first fleet-wide audit feed — a pure
@@ -322,12 +330,21 @@ def create_app(
         CAPABLE. No stored vehicle flag exists anywhere; like every console
         surface, the strip renders only what the audit substrate proves."""
         live_by_equipment: dict[str, dict[str, Any]] = {}
+        last_terminal: dict[str, tuple[str, str]] = {}
         for workflow in _docs(db.collection("workflows")):
-            if workflow.get("status") in state.TERMINAL_STATES:
-                continue
             equipment = workflow.get("equipment_id")
+            if not equipment:
+                continue
+            if workflow.get("status") in state.TERMINAL_STATES:
+                # remembered so the UI can tell a REPAIRED vehicle (last
+                # recovery RELEASED) from a merely CANCELLED one — the
+                # readiness payoff celebrates only genuine repairs
+                stamp = str(workflow.get("updated_observed_at", ""))
+                if equipment not in last_terminal or stamp > last_terminal[equipment][0]:
+                    last_terminal[equipment] = (stamp, workflow["status"])
+                continue
             # oldest live recovery wins the tile (deterministic by id)
-            if equipment and (
+            if (
                 equipment not in live_by_equipment
                 or workflow["workflow_id"] < live_by_equipment[equipment]["workflow_id"]
             ):
@@ -348,6 +365,11 @@ def create_app(
                     "status": status,
                     "workflow_id": active["workflow_id"] if active else None,
                     "workflow_status": active["status"] if active else None,
+                    "last_outcome": (
+                        last_terminal[equipment_id][1]
+                        if active is None and equipment_id in last_terminal
+                        else None
+                    ),
                 }
             )
         capable = sum(1 for v in vehicles if v["status"] == "MISSION_CAPABLE")
@@ -464,6 +486,7 @@ def create_app(
                 now = {
                     "kind": "processing",
                     "text": f"Processing {claim['schema_version'] or 'event'}",
+                    "schema_version": claim["schema_version"],
                     "workflow_id": claim["workflow_id"],
                 }
             elif package is not None:
@@ -704,4 +727,5 @@ def production_app() -> FastAPI:  # pragma: no cover - Cloud Run entrypoint
         firestore.Client(project=project),
         publish=lambda message, key: publisher.publish(topic, message, key),
         ingest_forward=ingest_forward,
+        project_id=project,
     )
