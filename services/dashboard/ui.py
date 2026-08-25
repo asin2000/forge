@@ -354,6 +354,9 @@ function storyPanel(id,d){
    </div></div>`;
 }
 function vetoCallout(d){
+  // live-attention callout only: once the recovery is terminal the veto is
+  // history, and the audit-trail table below is its permanent record
+  if(['RELEASED','CANCELLED'].includes(d.state.status))return '';
   const vetoes=d.audit_trail.filter(e=>e.event_kind==='veto'||e.reason_code==='ACTION_VETOED'
     ||e.reason_code==='VERDICT_VETOED'||e.reason_code==='RELEASE_VERDICT_VETOED');
   if(!vetoes.length)return '';

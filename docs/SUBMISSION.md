@@ -12,7 +12,7 @@ this in sync with `README.md`; the README is authoritative for setup.
   and the testing addresses have direct access; no collaborator grants
   required. SUB-3's named-address sharing clause applies to private repos
   and is satisfied by public visibility.)
-- **Frozen artifact:** git tag `v1.3-demo.9` (pins precede the tag; the v1.3
+- **Frozen artifact:** git tag `v1.3-demo.10` (pins precede the tag; the v1.3
   series' 10/10 acceptance records live in `docs/verification/`)
 - **Hosted URL:** the operator console (read-only except the audited HUM-1
   approvals and HUM-3 operator controls) runs on Cloud Run behind IAM
