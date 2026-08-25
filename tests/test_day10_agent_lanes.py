@@ -297,6 +297,10 @@ def test_page_carries_the_mission_story_and_hero_moments():
         "Inject agent failure",
         "View distributed trace",
         "operator authenticated",
+        "Idle — ready",
+        "Recovery day",
+        "simday",
+        "dueIn",
         "vetoCallout",
         "prefers-reduced-motion",
     ):
