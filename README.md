@@ -90,6 +90,12 @@ push subscriptions, and the per-minute heartbeat:
 
     PROJECT_ID=<id> PYTHON=./.venv/bin/python bash infra/deploy.sh
 
+The same deploy also runs keylessly from GitHub Actions via Workload
+Identity Federation (CI-6): `.github/workflows/deploy.yml` fires on
+version tags or manual dispatch and finishes with a live smoke — one
+Gemini agent round-trip and one bus publish/consume
+(`scripts/ci6_smoke.py`).
+
 Prerequisites: authenticated principal WITH Application Default Credentials
 (`gcloud auth application-default login`), billing enabled, CWD = repo
 root, and the local spin-up above (the deploy uses your interpreter for the
@@ -124,14 +130,14 @@ data is synthetic (SUB-5).
 
 ## Acceptance & evidence
 
-Frozen at tag **`v1.3-demo.6`** (DFT-4; commit `c15af7b`; series began
+Frozen at tag **`v1.3-demo.8`** (DFT-4; commit `eb9b333`; series began
 at `v1.3-demo` = `7e19d47`). The v1.3
 operator-console amendment (HUM-3) reset the acceptance count per the
 entrant's rule, and the full live acceptance re-ran on the new tag
 (baseline history: `v1.2-demo` … `v1.2-demo.3`). CI enforces eight gates on
 every PR (lint, contracts+ICD-3, unit, real-emulator integration, secrets,
-dead-code, config/registry+residency, traceability); the suite is **315
-tests (294 unit + 21 real-client emulator)** and traceability runs in
+dead-code, config/registry+residency, traceability); the suite is **322
+tests (301 unit + 21 real-client emulator)** and traceability runs in
 strict mode.
 
 Live acceptance on the frozen commit, verbatim captures in
@@ -139,7 +145,7 @@ Live acceptance on the frozen commit, verbatim captures in
 
 - **CI-8 — 10/10 consecutive** live spines, NMC → RELEASED, real
   `gemini-3.5-flash` reasoning with two human-gated approvals each — re-run
-  fresh for every v1.3 re-acceptance: six first-attempt, zero-reset
+  fresh for every v1.3 re-acceptance: seven first-attempt, zero-reset
   10/10 runs
   (`scripts/acceptance_run.sh`; records in
   `docs/verification/2026-08-23-v13-acceptance.md`,
