@@ -22,23 +22,20 @@ gcloud auth application-default print-access-token >/dev/null   # ADC warm
 gcloud run services list --project "$PROJECT_ID" --region us-central1 \
   --format="value(metadata.name,status.conditions[0].status)"
 
-# 1) reset the synthetic logical clock so the demo reads Day 0 -> Day 21
-PROJECT_ID=$PROJECT_ID python - <<'PY'
-import sys; sys.path.insert(0,'src')
-from google.cloud import firestore
-from forge_common import layout
-import os
-layout.clock_ref(firestore.Client(project=os.environ['PROJECT_ID'])).set({'logical_time': 0})
-print('logical clock reset to Day 0')
-PY
+# 1) remove stale demo workflows so the list is clean (the sim clock is
+#    NEVER reset — day counts in the console are per-recovery, so the demo
+#    reads "Day 0 of recovery" regardless of the clock's absolute value)
+#    (cancel leftovers from the console, or delete them driver-style)
 
 # 2) start the identity-token forwarder (browser clicks need a bearer the
 #    APP can see; the gcloud proxy only satisfies the platform)
 PROJECT_ID=$PROJECT_ID python ~/dev/forge-tools/auth_forwarder.py 8090 &
 ```
 
-Browser to `http://localhost:8090/`. The header shows the logical Day and
-your authenticated operator identity.
+Browser to `http://localhost:8090/`. The header shows the
+operator-authenticated check; every day count a viewer sees is relative to
+the selected recovery (the absolute sim clock lives quietly beside the
+Advance control).
 
 **Framing rules (from review):** record the browser CONTENT AREA only —
 crop all browser chrome so no `localhost` URL is visible. Prove deployment
@@ -79,8 +76,9 @@ Trace waterfall you can refresh after the spine completes.
 3. **Approve gate 1** — the schedule_override card appears
    (AWAITING_SCHEDULE_APPROVAL). Read FACTS/RULES aloud, click
    **Approve** — your authenticated identity lands in the audit row.
-4. **Advance the clock** — 21 days, click **Advance**. The Day chip jumps,
-   the due event fires, the workflow resumes unattended:
+4. **Advance the clock** — 21 days, click **Advance**. The story panel's
+   "part due in 21 days" flips to due, the due event fires, and the
+   workflow resumes unattended:
    PART_ETA_REACHED → ASSEMBLY_RESUMED → AWAITING_RELEASE_APPROVAL.
 5. **Approve release** — second HUM-1 gate → RELEASED. The closing shot
    plays itself: the vehicle tile flips amber NMC → green MC, the fleet

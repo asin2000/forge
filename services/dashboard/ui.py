@@ -111,7 +111,6 @@ box-shadow:0 6px 30px rgba(0,0,0,.55);animation:bannerin 2.8s ease-in-out 1 forw
 <div id="banners"></div>
 <div class="headrow">
 <h1>FORGE Readiness Console <span class="mut">· governed operator console (HUM-1 / HUM-3)</span></h1>
-<span class="clockchip">Day <span id="clockday">—</span></span>
 <span class="mut" id="operator"></span>
 </div>
 <div class="fleet" id="fleet"></div>
@@ -127,7 +126,8 @@ box-shadow:0 6px 30px rgba(0,0,0,.55);animation:bannerin 2.8s ease-in-out 1 forw
    <p><button onclick="startWorkflow()">Report NMC</button></p>
    <label>Advance clock (days)</label>
    <input id="op-days" value="21">
-   <p><button onclick="advanceClock()">Advance</button></p>
+   <p><button onclick="advanceClock()">Advance</button>
+      <span class="mut" style="font-size:.75rem">sim clock: Day <span id="simday">—</span></span></p>
   </div>
   <div class="panel"><h2>Synthetic Demo Controls</h2>
    <p class="mut" style="font-size:.78rem;margin:0 0 .5rem">Anomaly injection for the demonstration —
@@ -150,7 +150,11 @@ box-shadow:0 6px 30px rgba(0,0,0,.55);animation:bannerin 2.8s ease-in-out 1 forw
  <div id="agentstrip" class="lanes mut">—</div></div>
 <script>
 let CUR=null;let CURTERMINAL=false;let FILTER=null;let LANEWAS={};let LANES=[];let META={};
-let SEEN=null;let FLEETWAS=null;let AUTOPICKED=false;
+let SEEN=null;let FLEETWAS=null;let AUTOPICKED=false;let CLOCKNOW=0;
+// day numbers a VIEWER reads are RELATIVE to the recovery — the global sim
+// clock is monotonic bookkeeping (it is never reset), shown only beside the
+// Advance control
+function dueIn(due){const k=due-CLOCKNOW;return k<=0?'due now':'due in '+k+(k===1?' day':' days')}
 async function j(u,opt){const r=await fetch(u,opt);if(!r.ok)throw new Error(await r.text());return r.json()}
 function tag(v){return `<span class="tag ${v}">${v}</span>`}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';')}
@@ -185,7 +189,7 @@ const STAGES=[['INTAKE','Reported'],['PLANNING','Planning'],['VALIDATING','Valid
 function nextExpected(s,due){return {INTAKE:'Orchestrator decomposition',
  PLANNING:'Recovery plan + sourcing report',VALIDATING:'Safety verdicts → approval request',
  AWAITING_SCHEDULE_APPROVAL:'Your schedule-override decision',
- SUSPENDED_AWAITING_PART:'Due event at Day '+due+' — advance the clock',
+ SUSPENDED_AWAITING_PART:'Part '+dueIn(due)+' — advance the clock',
  ASSEMBLY_RESUMED:'Roster validation → release request',
  AWAITING_RELEASE_APPROVAL:'Your release decision',RELEASED:'None — recovery complete',
  BLOCKED_AGENT_FAILURE:'Operator attention: restore the agent or cancel',
@@ -220,8 +224,7 @@ async function loadFleet(){
 async function loadWorkflows(){
   const list=await j('/api/workflows');
   document.getElementById('wfs').innerHTML=list.map(w=>
-    `<li class="wfitem${CUR===w.workflow_id?' selected':''}"><a onclick="show('${w.workflow_id}')" title="${esc(w.workflow_id)}">${esc(w.equipment_id)} recovery <span class="mut">${shortId(w.workflow_id)}</span></a> ${tag(w.status)}<br>
-     <span class="mut">day ${w.logical_time}${w.due_at!=null?' · due '+w.due_at:''}</span></li>`).join('')||'<li class="mut">none</li>';
+    `<li class="wfitem${CUR===w.workflow_id?' selected':''}"><a onclick="show('${w.workflow_id}')" title="${esc(w.workflow_id)}">${esc(w.equipment_id)} recovery <span class="mut">${shortId(w.workflow_id)}</span></a> ${tag(w.status)}${w.due_at!=null?`<br><span class="mut">part ${dueIn(w.due_at)}</span>`:''}</li>`).join('')||'<li class="mut">none</li>';
   if(!AUTOPICKED&&!CUR&&list.length){AUTOPICKED=true;
     const live=list.filter(w=>!['RELEASED','CANCELLED'].includes(w.status));
     const pick=(live.length?live:list).sort((a,b)=>String(b.updated_observed_at).localeCompare(String(a.updated_observed_at)))[0];
@@ -240,7 +243,8 @@ async function loadCatalog(){
     if(had)sel.value=had;}
 }
 async function loadClock(){
-  try{const c=await j('/api/clock');document.getElementById('clockday').textContent=c.logical_time}catch(e){}
+  try{const c=await j('/api/clock');CLOCKNOW=c.logical_time;
+    document.getElementById('simday').textContent=c.logical_time}catch(e){}
 }
 const BANNER_RULES={'DOCUMENT_QUARANTINED':['HOSTILE BULLETIN QUARANTINED','hostile'],
  'ACTION_VETOED':['SAFETY VETO — UNAUTHORIZED ACTION BLOCKED','good'],
@@ -278,13 +282,16 @@ async function loadLanes(){
     LANEWAS[l.definition_id]={working,top:top?top.observed_at+top.reason_code:was.top};
     const cls=['lane',working?'working':'',flash?'flash':'',
       l.now.kind==='failed'?'failedlane':'',FILTER===l.definition_id?'selected':''].join(' ');
+    const acting=(l.instances||[]).find(i=>i.instance_id===l.acting_instance_id)||{};
+    // CURRENT STATUS always leads; the last outcome rides second (entrant
+    // correction: outcomes augment status, never replace it)
     let main,sub='';
     if(working){main=busyCaption(role,l.now);sub=esc(l.now.text)+(l.now.workflow_id?' · '+shortId(l.now.workflow_id):'');}
     else if(l.now.kind==='failed'){main='FAILED — restore required';}
-    else if(l.now.kind==='reserve'){main='Standing by (reserve)';}
-    else{main=top?humanReason(top.reason_code):'Idle';sub=top?top.observed_at.slice(11,19):'';}
+    else if(l.now.kind==='reserve'){main='Standing by (reserve)';sub=top?'last: '+esc(humanReason(top.reason_code))+' · '+top.observed_at.slice(11,19):'';}
+    else{main='Idle — ready';sub=top?'last: '+esc(humanReason(top.reason_code))+' · '+top.observed_at.slice(11,19):'';}
     return `<div class="${cls}" onclick="laneFilter('${l.definition_id}')">
-     <div class="role">${esc(role)} <span class="mut">${esc(l.acting_instance_id||'')}</span></div>
+     <div class="role">${esc(role)} ${acting.state?tag(acting.state):''} ${acting.health?tag(acting.health):''} <span class="mut">${esc(l.acting_instance_id||'')}</span></div>
      <div class="nowline">${working?'<span class="dot"></span>':''}${esc(main)}</div>
      <div class="sub2">${sub||'&nbsp;'}</div>
      <div class="mini">${l.recent.map((e,n)=>`<div${n===0&&newEvt?' class="new"':''}>
@@ -339,7 +346,7 @@ function storyPanel(id,d){
     <div><div class="k">Current action</div>${esc(action)}</div>
     <div><div class="k">Owned by</div>${esc(owner)}</div>
     <div><div class="k">Next expected event</div>${esc(nextExpected(s,d.state.due_at))}</div>
-    <div><div class="k">Logical day</div>Day ${d.state.logical_time}${d.state.due_at!=null?' · part ETA Day '+d.state.due_at:''}</div>
+    <div><div class="k">Recovery day</div>Day ${Math.max(0,CLOCKNOW-(d.audit_trail.length?d.audit_trail[0].effective_at:CLOCKNOW))}${d.state.due_at!=null?' · part '+dueIn(d.state.due_at):''}</div>
    </div></div>`;
 }
 function vetoCallout(d){
