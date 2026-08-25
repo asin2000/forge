@@ -138,8 +138,9 @@ Live acceptance on the frozen commit, verbatim captures in
 `docs/verification/`:
 
 - **CI-8 — 10/10 consecutive** live spines, NMC → RELEASED, real
-  `gemini-3.5-flash` reasoning with two human-gated approvals each — run
-  fresh on BOTH v1.3 tags, first attempt, zero resets each time
+  `gemini-3.5-flash` reasoning with two human-gated approvals each — re-run
+  fresh for every v1.3 re-acceptance: three first-attempt, zero-reset
+  10/10 runs
   (`scripts/acceptance_run.sh`; records in
   `docs/verification/2026-08-23-v13-acceptance.md`,
   `docs/verification/2026-08-24-day10-console.md`, and
