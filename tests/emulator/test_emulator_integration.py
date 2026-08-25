@@ -1960,3 +1960,128 @@ def test_day9_operator_console_start_cancel_real_client(db):
     reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, wf)]
     assert "NMC_EVENT_STALE" in reasons
     assert layout.workflow_ref(db, wf).get().to_dict()["status"] == "CANCELLED"
+
+
+def test_day14_duplicate_exclusive_create_under_real_contention(db):
+    """Entrant cleanup item 2: the one-recovery-per-vehicle marker must
+    hold under REAL Firestore transactional contention — two simultaneous
+    exclusive creates for the same vehicle commit exactly one workflow."""
+    import concurrent.futures
+
+    from forge_common import layout
+    from forge_common.state import DuplicateRecovery
+
+    ids = [unique_wf(), unique_wf()]
+
+    def start(workflow_id):
+        state.create_workflow(
+            db,
+            workflow_id=workflow_id,
+            equipment_id="GX12-08",
+            trace_id=deterministic_trace_id(workflow_id),
+            logical_time=0,
+            exclusive=True,
+        )
+        return workflow_id
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = [pool.submit(start, workflow_id) for workflow_id in ids]
+        results = []
+        for future in outcomes:
+            try:
+                results.append(("ok", future.result()))
+            except DuplicateRecovery as exc:
+                results.append(("refused", exc.existing_workflow_id))
+    kinds = sorted(kind for kind, _ in results)
+    assert kinds == ["ok", "refused"], results
+    live = [
+        wid
+        for wid in ids
+        if (layout.workflow_ref(db, wid).get().to_dict() or {}).get("status") == "INTAKE"
+    ]
+    assert len(live) == 1
+    # cleanup: free the vehicle for any future suite runs
+    for wid in ids:
+        for sub in ("audit", "outbox", "inbox"):
+            for snapshot in layout.workflow_ref(db, wid).collection(sub).stream():
+                snapshot.reference.delete()
+        layout.workflow_ref(db, wid).delete()
+
+
+def test_day14_failed_owner_refusal_real_client(db):
+    """Entrant cleanup item 2: the FAILED-owner result refusal on the real
+    client — commit-time transactional read, refusal audited, package left
+    ASSIGNED."""
+    from services.supply.handlers import make_handler as make_supply
+    from tests.adk_stub import stub_json
+
+    from forge_common import layout
+    from forge_common import registry as reg
+    from forge_common.audit import now_iso
+    from forge_common.bus import process_message
+    from forge_common.messages import build_envelope, deterministic_event_id
+
+    wf = unique_wf()
+    trace = deterministic_trace_id(wf)
+    layout.clock_ref(db).set({"logical_time": 0})
+    state.create_workflow(
+        db, workflow_id=wf, equipment_id="GX12-09", trace_id=trace, logical_time=0
+    )
+    wp_id = f"wp-supply-{wf.removeprefix('wf-')}"[:40]
+    layout.work_package_ref(db, wf, wp_id).set(
+        {
+            "work_package_id": wp_id,
+            "role": "supply",
+            "owner_instance_id": "agent-supply-01",
+            "status": "ASSIGNED",
+            "assignment_seq": 1,
+            "inputs": {"equipment_id": "GX12-09", "discrepancy_code": "DSC-0042"},
+            "assigned_observed_at": now_iso(),
+        }
+    )
+    reg.instance_ref(db, "agent-supply-01").set(
+        {
+            "instance_id": "agent-supply-01",
+            "definition_id": "forge-supply",
+            "role": "supply",
+            "state": "ACTIVE",
+            "last_heartbeat_at": None,
+        }
+    )
+    reg.operator_set_instance_state(
+        db, instance_id="agent-supply-01", action="fail", operator="qa@example.test"
+    )
+    assignment = {
+        "envelope": build_envelope(
+            workflow_id=wf,
+            work_package_id=wp_id,
+            schema_version="work_package_assignment.v2",
+            event_id=deterministic_event_id("emu-day14-assign", wf),
+            trace_id=trace,
+            idempotency_key=f"idem-emu-day14-{wf[-8:]}",
+        ),
+        "payload": {
+            "role": "supply",
+            "objective": "Source the approved actuator and report shipment status.",
+            "assigned_agent_id": "agent-supply-01",
+            "assignment_seq": 1,
+            "inputs": {"equipment_id": "GX12-09", "discrepancy_code": "DSC-0042"},
+        },
+    }
+    sourcing = stub_json(
+        {
+            "part_number": "HYD-ACT-4402",
+            "part_approved": True,
+            "shipment_status": "delayed",
+            "eta_days": 21,
+        }
+    )
+    assert process_message(
+        db, assignment, make_supply(db, sourcing), consumer_identity="forge-supply"
+    )
+    assert layout.work_package_ref(db, wf, wp_id).get().to_dict()["status"] == "ASSIGNED"
+    reasons = [e["payload"]["reason_code"] for e in state.reconstruct_audit_trail(db, wf)]
+    assert "RESULT_REFUSED_OWNER_FAILED" in reasons
+    reg.operator_set_instance_state(
+        db, instance_id="agent-supply-01", action="restore", operator="qa@example.test"
+    )

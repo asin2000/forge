@@ -553,8 +553,40 @@ def create_app(
                 outbox_messages=[nmc],
                 exclusive=True,
             )
+        except state.DuplicateRecovery as exc:
+            # one active recovery per vehicle (entrant QA P1) — and the
+            # refused operator action is AUDITED like every other one
+            # (HUM-3/AUD-1), on the ACTIVE recovery's trail
+            existing_id = exc.existing_workflow_id
+            existing_snapshot = layout.workflow_ref(db, existing_id).get()
+            existing = (
+                existing_snapshot.to_dict()
+                if hasattr(existing_snapshot, "to_dict")
+                else existing_snapshot
+            )
+            rejection = build_audit_event(
+                workflow_id=existing_id,
+                trace_id=(existing or {}).get("trace_id", "0" * 32),
+                agent_identity=OPERATOR_SURFACE_IDENTITY,
+                event_kind="blocked_action",
+                reason_code="OPERATOR_START_REJECTED",
+                input_obj={"equipment_id": exc.equipment_id, "action": "workflow_start"},
+                output_obj={"refused": True, "existing_workflow_id": existing_id},
+                effective_at=read_clock(db),
+                detail=bounded_json_detail({"operator": operator}),
+            )
+
+            def _record_rejection(txn: Any) -> None:
+                # leading read: real transactions begin lazily on first read
+                layout.txn_get_dict(txn, layout.workflow_ref(db, existing_id))
+                txn.create(
+                    layout.audit_ref(db, existing_id, rejection["envelope"]["event_id"]),
+                    rejection,
+                )
+
+            layout.run_in_transaction(db, _record_rejection)
+            raise HTTPException(409, str(exc)) from exc
         except state.InvalidTransition as exc:
-            # one active recovery per vehicle (entrant QA P1)
             raise HTTPException(409, str(exc)) from exc
         _drain(workflow_id)
         return {"workflow_id": workflow_id, "status": "INTAKE", "operator": operator}

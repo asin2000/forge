@@ -86,8 +86,13 @@ no SA keys) on version tags or manual dispatch, followed by the live smoke.
 - The entrant's own live workflows are his; never clean them up silently.
 - Recording precondition is a CLEAN workflow list (cancel/delete residue),
   never a clock reset. The demo reads per-recovery days.
-- Every merged change: PR through all 8 gates → re-tag → redeploy → fresh
-  10/10 + rehearsal → evidence doc in `docs/verification/` → pin README.
+- Every merged change: PR through all 8 gates (README/SUBMISSION pins in
+  the SAME PR, so the tag's own tree self-describes) → re-tag → the tag
+  push IS the redeploy (CI-6 WIF) → fresh 10/10 + rehearsal → evidence doc
+  in `docs/verification/`.
+- NEVER push a `v*` tag or run acceptance while the entrant may be
+  recording or driving the console — both disturb the live fleet. Hold
+  them until he confirms.
 
 ## Key design decisions (details in docs/decisions.md)
 

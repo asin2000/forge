@@ -68,6 +68,17 @@ class InvalidTransition(Exception):
     """Transition not allowed by the table or its due_at rules."""
 
 
+class DuplicateRecovery(InvalidTransition):
+    """HUM-3 exclusivity: the vehicle already has an active recovery."""
+
+    def __init__(self, equipment_id: str, existing_workflow_id: str, status: str):
+        self.equipment_id = equipment_id
+        self.existing_workflow_id = existing_workflow_id
+        super().__init__(
+            f"{equipment_id} already has an active recovery ({existing_workflow_id}, {status})"
+        )
+
+
 class GateBlocked(Exception):
     """HUM-1: gated transition without a valid, unconsumed approved decision."""
 
@@ -311,10 +322,7 @@ def create_workflow(
             if marker and marker.get("workflow_id"):
                 existing = layout.txn_get_dict(txn, layout.workflow_ref(db, marker["workflow_id"]))
                 if existing and existing.get("status") not in TERMINAL_STATES:
-                    raise InvalidTransition(
-                        f"{equipment_id} already has an active recovery "
-                        f"({marker['workflow_id']}, {existing['status']})"
-                    )
+                    raise DuplicateRecovery(equipment_id, marker["workflow_id"], existing["status"])
         doc = layout.validate_state_doc(
             {
                 "workflow_id": workflow_id,
