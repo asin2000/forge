@@ -8,9 +8,10 @@ this in sync with `README.md`; the README is authoritative for setup.
 - **Entrant:** Dr. Armond E. Sinclair — **solo individual entry**. "Anansi
   Labs" is the entrant's professional affiliation only; not a team or company
   entry; any prize payable to the entrant personally.
-- **Repository:** https://github.com/asin2000/forge (private — **must be
-  shared** with `testing@devpost.com` and `cloudhackathons@google.com` before
-  SUB-7; see Open items — grant collaborator access on GitHub and confirm)
+- **Repository:** https://github.com/asin2000/forge (**public** — judges
+  and the testing addresses have direct access; no collaborator grants
+  required. SUB-3's named-address sharing clause applies to private repos
+  and is satisfied by public visibility.)
 - **Frozen artifact:** git tag `v1.3-demo.6` (commit `c15af7b`; the v1.3
   series' 10/10 acceptance records live in `docs/verification/`)
 - **Hosted URL:** the operator console (read-only except the audited HUM-1
@@ -110,15 +111,18 @@ vendor bulletin are synthetic fixtures under `data/` (SUB-5).
 ```mermaid
 flowchart TB
     OPR([Authenticated operator]) -->|Cloud Run IAM| HUM[Operator console<br/>HUM-1 approvals · HUM-3 start/cancel/<br/>clock/anomalies · agent lanes · fleet strip]
-    HUM -->|nmc_event start · approval_decision| ORC[Readiness Orchestrator<br/>no domain work]
-    NMC[NMC event] --> ORC
-    ORC -->|work_package_assignment| MNT[Maintenance]
-    ORC -->|work_package_assignment| SUP[Supply]
-    ORC -->|work_package_assignment| WKF[Workforce]
-    MNT -->|plan| SAF[Safety & Policy]
-    SUP -->|sourcing report| SAF
-    WKF -->|roster| SAF
-    SAF -->|validation verdict| ORC
+    HUM -->|nmc_event start · approval_decision| PS{{Pub/Sub bus<br/>ordering keys + DLQ}}
+    NMC[NMC event] --> PS
+    PS --> ORC[Readiness Orchestrator<br/>no domain work]
+    ORC -->|work_package_assignment| PS
+    PS --> MNT[Maintenance]
+    PS --> SUP[Supply]
+    PS --> WKF[Workforce]
+    MNT -->|plan| PS
+    SUP -->|sourcing report| PS
+    WKF -->|roster| PS
+    PS --> SAF[Safety & Policy]
+    SAF -->|validation verdict| PS
     ORC -->|approval_request HUM-2 record| HUM
     DOC[External vendor bulletin] -->|POST /ingest| CT[Cyber Trust<br/>quarantine-first]
     HUM -.HUM-3 bulletin injection.-> CT
@@ -127,13 +131,19 @@ flowchart TB
     CT -->|classify| CLF[Tool-less classifier]
     CT -->|quarantine_verdict + safe metadata| SAF
     ORC <--> FS[(Firestore:<br/>state, inbox/outbox, audit,<br/>registry, Logical Clock)]
-    ORC <--> PS{{Pub/Sub bus<br/>ordering keys + DLQ}}
     ORC -.OTel one trace.-> CTr[(Cloud Trace)]
     CLK[Cloud Scheduler heartbeat] -.resume after 21 days.-> ORC
 ```
 
-Each box (except the human and the external document) is its own Cloud Run
-service with its own service account; the bus is Pub/Sub; state and audit are
+The seven Cloud Run services (each with its own service account) are the
+operator console, the Readiness Orchestrator, Maintenance, Supply,
+Workforce, Safety & Policy, and Cyber Trust; every agent-to-agent edge above
+physically transits the Pub/Sub bus (contract-validated, per-workflow
+ordering, DLQ) even where the flowchart draws the logical route; the human,
+the external document, the registry, and the datastores are not services.
+Polished renderings consistent with `architecture/manifest.yaml` (SUB-2):
+`docs/forge-architecture.svg` / `docs/forge-architecture.png`. State and
+audit are
 Firestore. See `architecture/manifest.yaml` for the service → module map and
 `docs/verification/` for live evidence.
 

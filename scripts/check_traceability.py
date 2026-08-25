@@ -10,6 +10,7 @@ least one requirement; (c) in strict mode ('strict: true' in the YAML, or
 
 from __future__ import annotations
 
+import datetime
 import sys
 from pathlib import Path
 
@@ -50,9 +51,29 @@ def main() -> int:
     strict_flag = "--strict" in sys.argv
     data = yaml.safe_load(TRACE.read_text())
     strict = bool(data.get("strict", False)) or strict_flag
-    pending_allowed = set(data.get("pending_allowed", []))
     reqs = data.get("requirements", {})
     failures: list[str] = []
+
+    # Entrant QA (2026-08-25): "strict PASS" with open-ended exemptions is
+    # misleading. Every exemption must be DATED with a reason and DIES on
+    # its date — an expired exemption fails the gate loudly.
+    pending_allowed: set[str] = set()
+    today = datetime.date.today()
+    for entry in data.get("pending_allowed", []) or []:
+        if not isinstance(entry, dict) or not {"id", "until", "reason"} <= set(entry):
+            failures.append(f"pending_allowed entry must be {{id, until, reason}}: {entry!r}")
+            continue
+        until = entry["until"]
+        if not isinstance(until, datetime.date):
+            failures.append(f"pending_allowed[{entry['id']}]: until must be a date, got {until!r}")
+            continue
+        if today > until:
+            failures.append(
+                f"pending_allowed[{entry['id']}]: exemption EXPIRED {until} "
+                f"({entry['reason']}) — close it or re-date it with rationale"
+            )
+            continue
+        pending_allowed.add(entry["id"])
 
     missing = [rid for rid in EXPECTED_IDS if rid not in reqs]
     unknown = [rid for rid in reqs if rid not in EXPECTED_IDS]

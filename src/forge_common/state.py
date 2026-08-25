@@ -280,6 +280,7 @@ def create_workflow(
     agent_identity: str = "forge-orchestrator",
     detail: str | None = None,
     outbox_messages: list[dict[str, Any]] | None = None,
+    exclusive: bool = False,
 ) -> dict[str, Any]:
     """Create the workflow state document in INTAKE, audited (ORC-5, AUD-1).
 
@@ -297,6 +298,23 @@ def create_workflow(
         # Doubles as an explicit existence check.
         if layout.txn_get_dict(txn, layout.workflow_ref(db, workflow_id)):
             raise InvalidTransition(f"workflow {workflow_id} already exists")
+        # ONE active recovery per vehicle when ``exclusive`` (the HUM-3
+        # console start — entrant QA P1): the per-equipment marker is
+        # read-then-written in THIS transaction, so two simultaneous starts
+        # cannot both commit. A marker pointing at a terminal or deleted
+        # workflow is stale and is simply overwritten. Harness/driver
+        # creations stay non-exclusive (synthetic fixtures legitimately
+        # revisit the same vehicle).
+        marker_ref = db.collection("active_recoveries").document(equipment_id)
+        if exclusive:
+            marker = layout.txn_get_dict(txn, marker_ref)
+            if marker and marker.get("workflow_id"):
+                existing = layout.txn_get_dict(txn, layout.workflow_ref(db, marker["workflow_id"]))
+                if existing and existing.get("status") not in TERMINAL_STATES:
+                    raise InvalidTransition(
+                        f"{equipment_id} already has an active recovery "
+                        f"({marker['workflow_id']}, {existing['status']})"
+                    )
         doc = layout.validate_state_doc(
             {
                 "workflow_id": workflow_id,
@@ -321,6 +339,8 @@ def create_workflow(
             detail=detail,
         )
         txn.create(layout.workflow_ref(db, workflow_id), doc)
+        if exclusive:
+            txn.set(marker_ref, {"workflow_id": workflow_id, "claimed_observed_at": now_iso()})
         txn.create(layout.audit_ref(db, workflow_id, audit["envelope"]["event_id"]), audit)
         for message in outbox_messages or []:
             txn.create(

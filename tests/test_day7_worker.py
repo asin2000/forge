@@ -283,6 +283,9 @@ def test_tick_runs_monitor_clock_and_sweeps_undrained_outboxes():
             "orchestrator",
             model=stub_json(DECOMPOSITION),
             publish=lambda m, k: published.append(m),
+            # entrant QA P2: the registry carries real deployed endpoints —
+            # a unit test must never fall through to the OIDC prober
+            health_prober=lambda endpoint: False,
         )
     )
     # an undrained record (a dashboard decision whose post-commit drain died)

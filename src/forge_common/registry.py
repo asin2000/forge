@@ -423,11 +423,23 @@ def check_wp_status_update(
         return {"skip": True}
     owner = layout.txn_get_dict(txn, instance_ref(db, expected_owner)) or {}
     clock_doc = layout.txn_get_dict(txn, layout.clock_ref(db))
+    logical_now = int(clock_doc["logical_time"]) if clock_doc else 0
+    if owner.get("state") == "FAILED":
+        # Entrant QA P1: an instance failed MID-WORK must not commit a
+        # success afterwards. Refuse the result (the bundle never applies);
+        # the package stays ASSIGNED, the monitor times it out, and the
+        # normal failure disposition (reserve or BLOCKED) takes over.
+        return {
+            "skip": True,
+            "reason": "owner_failed",
+            "owner": expected_owner,
+            "logical_now": logical_now,
+        }
     return {
         "skip": False,
         "work_package": wp,
         "owner_state": owner.get("state"),
-        "logical_now": int(clock_doc["logical_time"]) if clock_doc else 0,
+        "logical_now": logical_now,
     }
 
 
