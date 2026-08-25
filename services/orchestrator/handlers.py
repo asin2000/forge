@@ -205,6 +205,7 @@ def make_nmc_handler(db: Any, *, model: Any):
                     "role": role,
                     "objective": decomposition["objectives"][role],
                     "inputs": payload,
+                    "effective_at": read_clock(db),
                 }
             )
         writes.transition = {
@@ -502,6 +503,7 @@ def make_plan_handler(db: Any):
                 "role": "workforce",
                 "objective": objective,
                 "inputs": inputs,
+                "effective_at": read_clock(db),
             }
         )
         wf = _get_dict(layout.workflow_ref(db, workflow_id))

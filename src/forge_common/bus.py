@@ -490,7 +490,12 @@ def _process_message_inner(
                 )
             for update, plan in zip(writes.work_package_status_updates, status_plans, strict=True):
                 registry.apply_wp_status_update(
-                    txn, db, workflow_id=workflow_id, **update, plan=plan
+                    txn,
+                    db,
+                    workflow_id=workflow_id,
+                    **update,
+                    plan=plan,
+                    trace_id=envelope["trace_id"],
                 )
             if (
                 writes.owned_effects is not None
@@ -504,6 +509,7 @@ def _process_message_inner(
                     work_package_id=writes.owned_effects["work_package_id"],
                     status=writes.owned_effects["status"],
                     plan=owned_plan,
+                    trace_id=envelope["trace_id"],
                 )
                 for audit in writes.owned_effects.get("audit_events", []):
                     txn.create(
