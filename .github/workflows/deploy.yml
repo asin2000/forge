@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PROJECT_ID: forge-agentic-0821-6418
+      # a fresh runner has no interactive session — never let gcloud prompt
+      CLOUDSDK_CORE_DISABLE_PROMPTS: "1"
     steps:
       - uses: actions/checkout@v4
       - id: auth
